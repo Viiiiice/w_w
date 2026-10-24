@@ -185,8 +185,15 @@ function AnimationLogger.build(Tab, ctx)
 
 	Actions:AddButton({
 		Title = "Open preview window",
-		Description = "Pop-out 3D rig that plays the animation",
-		Callback = withSelected(PreviewWindow.show),
+		Description = "Pop-out 3D rig viewer with its own animation list",
+		Callback = function()
+			local e = selected()
+			if e then
+				PreviewWindow.show(e)
+			else
+				PreviewWindow.open()
+			end
+		end,
 	})
 
 	local Tools = Tab:AddSection("Tools")
