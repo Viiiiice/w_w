@@ -100,6 +100,7 @@ function AnimationLogger.build(Tab, ctx)
 			details:SetDesc("Pick an animation above.")
 			return
 		end
+		
 		details:SetTitle(e.name)
 		details:SetDesc(
 			string.format(
