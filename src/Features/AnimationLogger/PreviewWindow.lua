@@ -24,7 +24,7 @@ local MAX_LIST_ITEMS = 200
 local LIST_WIDTH = 190
 local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 340)
 local MAX_SIZE = Vector2.new(1400, 1000)
-local BLOCK_ZOOM_ACTION = "w_wPreviewBlockZoom"
+local BLOCK_CAMERA_ACTION = "w_wPreviewBlockCamera"
 
 local gui
 local ui = {}
@@ -47,7 +47,8 @@ local state = {
 	listDirty = true,
 	lastListRefresh = 0,
 	scrubbing = false,
-	zoomBlocked = false,
+	orbiting = false,
+	cameraBlocked = false,
 }
 
 local function new(class, props, children)
@@ -406,13 +407,16 @@ local function build()
 	})
 
 	do
-		local orbiting = false
+		local ORBIT_BUTTONS = {
+			[Enum.UserInputType.MouseButton1] = true,
+			[Enum.UserInputType.MouseButton2] = true,
+			[Enum.UserInputType.Touch] = true,
+		}
+		local lastPos
 		ui.viewport.InputBegan:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
-				orbiting = true
+			if ORBIT_BUTTONS[input.UserInputType] then
+				state.orbiting = true
+				lastPos = input.Position
 			end
 		end)
 		ui.viewport.InputChanged:Connect(function(input)
@@ -422,22 +426,21 @@ local function build()
 		end)
 		uiMaid:Give(UserInputService.InputChanged:Connect(function(input)
 			if
-				orbiting
+				state.orbiting
 				and (
 					input.UserInputType == Enum.UserInputType.MouseMovement
 					or input.UserInputType == Enum.UserInputType.Touch
 				)
 			then
-				state.yaw -= input.Delta.X * 0.01
-				state.pitch = math.clamp(state.pitch + input.Delta.Y * 0.01, -1.2, 1.2)
+				local delta = input.Position - lastPos
+				lastPos = input.Position
+				state.yaw -= delta.X * 0.01
+				state.pitch = math.clamp(state.pitch + delta.Y * 0.01, -1.2, 1.2)
 			end
 		end))
 		uiMaid:Give(UserInputService.InputEnded:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
-				orbiting = false
+			if ORBIT_BUTTONS[input.UserInputType] then
+				state.orbiting = false
 			end
 		end))
 	end
@@ -640,17 +643,25 @@ local function build()
 	gui.Parent = (gethui and gethui()) or Services.CoreGui
 end
 
-local function setZoomBlocked(blocked)
-	if blocked == state.zoomBlocked then
+local function setCameraBlocked(blocked)
+	if blocked == state.cameraBlocked then
 		return
 	end
-	state.zoomBlocked = blocked
+	state.cameraBlocked = blocked
 	if blocked then
-		ContextActionService:BindActionAtPriority(BLOCK_ZOOM_ACTION, function()
-			return Enum.ContextActionResult.Sink
-		end, false, Enum.ContextActionPriority.High.Value + 1, Enum.UserInputType.MouseWheel)
+		ContextActionService:BindActionAtPriority(
+			BLOCK_CAMERA_ACTION,
+			function()
+				return Enum.ContextActionResult.Sink
+			end,
+			false,
+			Enum.ContextActionPriority.High.Value + 1,
+			Enum.UserInputType.MouseWheel,
+			Enum.UserInputType.MouseButton2,
+			Enum.UserInputType.MouseMovement
+		)
 	else
-		ContextActionService:UnbindAction(BLOCK_ZOOM_ACTION)
+		ContextActionService:UnbindAction(BLOCK_CAMERA_ACTION)
 	end
 end
 
@@ -661,7 +672,7 @@ local function mouseOverWindow()
 end
 
 local function step()
-	setZoomBlocked(gui.Enabled and mouseOverWindow())
+	setCameraBlocked(gui.Enabled and (state.orbiting or state.scrubbing or mouseOverWindow()))
 
 	if state.listDirty and os.clock() - state.lastListRefresh > 0.3 then
 		refreshList()
@@ -722,7 +733,8 @@ function PreviewWindow.close()
 	gui.Enabled = false
 	state.entry = nil
 	state.scrubbing = false
-	setZoomBlocked(false)
+	state.orbiting = false
+	setCameraBlocked(false)
 	if state.render then
 		state.render:Disconnect()
 		state.render = nil
