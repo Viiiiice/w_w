@@ -5,7 +5,7 @@ local Players = Services.Players
 
 local Tracker = {}
 
-local hooked = setmetatable({}, { __mode = "k" })
+local hooked = {}
 
 local function ownerOf(animator)
 	local model = animator:FindFirstAncestorOfClass("Model")
@@ -38,11 +38,18 @@ local function hookAnimator(animator, maid)
 	if hooked[animator] then
 		return
 	end
-	hooked[animator] = true
-
-	maid:Give(animator.AnimationPlayed:Connect(function(track)
+	local played, ancestry
+	played = animator.AnimationPlayed:Connect(function(track)
 		onTrack(animator, track)
-	end))
+	end)
+	ancestry = animator.AncestryChanged:Connect(function()
+		if not animator:IsDescendantOf(workspace) then
+			played:Disconnect()
+			ancestry:Disconnect()
+			hooked[animator] = nil
+		end
+	end)
+	hooked[animator] = { played, ancestry }
 
 	local ok, playing = pcall(animator.GetPlayingAnimationTracks, animator)
 	if ok then
@@ -66,8 +73,13 @@ function Tracker.start(maid)
 	maid:Give(workspace.DescendantAdded:Connect(function(inst)
 		tryHook(inst, maid)
 	end))
-	
+
 	maid:Give(function()
+		for _, connections in pairs(hooked) do
+			for _, connection in ipairs(connections) do
+				connection:Disconnect()
+			end
+		end
 		table.clear(hooked)
 	end)
 end

@@ -19,8 +19,11 @@ function Scanner.scan()
 	end
 
 	local function sweep(list)
-		for _, inst in ipairs(list) do
+		for i, inst in ipairs(list) do
 			pcall(check, inst)
+			if i % 5000 == 0 then
+				task.wait()
+			end
 		end
 	end
 
@@ -28,7 +31,7 @@ function Scanner.scan()
 	if getinstances then
 		sweep(getinstances())
 	end
-	
+
 	if getnilinstances then
 		sweep(getnilinstances())
 	end

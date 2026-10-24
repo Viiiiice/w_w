@@ -23,6 +23,7 @@ local gui
 local ui = {}
 local uiMaid = Maid.new()
 local state = {
+	finished = false,
 	entry = nil,
 	rigKind = "Me",
 	rig = nil,
@@ -85,10 +86,14 @@ local function applySpeed()
 end
 
 local function stopTrack()
-	if state.track then
-		pcall(state.track.Stop, state.track, 0)
-		pcall(state.track.Destroy, state.track)
-		state.track = nil
+	local track, animation = state.track, state.animation
+	state.track, state.animation = nil, nil
+	if track then
+		pcall(track.Stop, track, 0)
+		pcall(track.Destroy, track)
+	end
+	if animation then
+		animation:Destroy()
 	end
 end
 
@@ -99,13 +104,22 @@ local function loadTrack(animator)
 	animation.AnimationId = "rbxassetid://" .. state.entry.id
 	local ok, track = pcall(animator.LoadAnimation, animator, animation)
 	if not ok or not track then
+		animation:Destroy()
 		setStatus("Couldn't load this animation (it may belong to another game/group).")
 		return
 	end
 
 	track.Looped = state.looped
+	track.Stopped:Connect(function()
+		if state.track == track and not track.Looped and not track.IsPlaying then
+			state.finished = true
+			state.playing = false
+			applySpeed()
+		end
+	end)
 	track:Play(0)
-	state.track = track
+	state.track, state.animation = track, animation
+	state.finished = false
 	applySpeed()
 end
 
@@ -300,7 +314,12 @@ local function build()
 		local track = state.track
 		if track and track.Length > 0 then
 			local frac = math.clamp((x - ui.timeline.AbsolutePosition.X) / ui.timeline.AbsoluteSize.X, 0, 1)
+			if not track.IsPlaying then
+				track:Play(0)
+				state.finished = false
+			end
 			track.TimePosition = frac * track.Length
+			applySpeed()
 		end
 	end)
 
@@ -315,7 +334,9 @@ local function build()
 	ui.play.MouseButton1Click:Connect(function()
 		state.playing = not state.playing
 		if state.playing and state.track and not state.track.IsPlaying then
+			state.finished = false
 			state.track:Play(0)
+			state.track.TimePosition = 0
 		end
 		applySpeed()
 	end)
@@ -324,6 +345,7 @@ local function build()
 	restart.MouseButton1Click:Connect(function()
 		if state.track then
 			state.playing = true
+			state.finished = false
 			state.track:Play(0)
 			state.track.TimePosition = 0
 			applySpeed()
@@ -401,7 +423,9 @@ local function step()
 		* CFrame.new(0, 0, state.zoom)
 
 	local track = state.track
-	if track and track.Length > 0 then
+	if state.finished then
+		ui.progress.Size = UDim2.fromScale(1, 1)
+	elseif track and track.Length > 0 then
 		ui.progress.Size = UDim2.fromScale(math.clamp(track.TimePosition / track.Length, 0, 1), 1)
 	else
 		ui.progress.Size = UDim2.fromScale(0, 1)
@@ -415,6 +439,8 @@ end
 function PreviewWindow.show(entry)
 	if not gui then
 		build()
+	end
+	if not state.render then
 		state.render = RunService.RenderStepped:Connect(step)
 	end
 
@@ -431,6 +457,10 @@ function PreviewWindow.close()
 		return
 	end
 	gui.Enabled = false
+	if state.render then
+		state.render:Disconnect()
+		state.render = nil
+	end
 	stopTrack()
 	if state.rig then
 		state.rig:Destroy()
@@ -441,7 +471,7 @@ end
 function PreviewWindow.destroy()
 	PreviewWindow.close()
 	uiMaid:Clean()
-	
+
 	if state.render then
 		state.render:Disconnect()
 		state.render = nil

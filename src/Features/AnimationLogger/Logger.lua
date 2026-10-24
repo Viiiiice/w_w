@@ -5,6 +5,7 @@ local Logger = {
 	paused = false,
 	entries = {}, -- [id] = Entry
 	count = 0,
+	_order = 0,
 
 	Added = Signal.new(), -- (entry) first time an id is seen
 	Updated = Signal.new(), -- (entry) seen again / new owner
@@ -18,6 +19,7 @@ local Logger = {
 	ownerList {string}
 	plays     number
 	lastSeen  number   os.clock() of last play
+	order     number   increases with each new id, used for stable sorting
 ]]
 
 local GENERIC_NAMES = { [""] = true, Animation = true, AnimationTrack = true }
@@ -38,17 +40,28 @@ function Logger.log(rawId, name, owner)
 
 	local entry = Logger.entries[id]
 	local isNew = entry == nil
+	local changed = false
 	if isNew then
-		entry = { id = id, name = name or "Animation", owners = {}, ownerList = {}, plays = 0 }
+		Logger._order += 1
+		entry = {
+			id = id,
+			name = name or "Animation",
+			owners = {},
+			ownerList = {},
+			plays = 0,
+			order = Logger._order,
+		}
 		Logger.entries[id] = entry
 		Logger.count += 1
 	elseif GENERIC_NAMES[entry.name] and name and not GENERIC_NAMES[name] then
 		entry.name = name
+		changed = true
 	end
 
 	if not entry.owners[owner] then
 		entry.owners[owner] = true
 		table.insert(entry.ownerList, owner)
+		changed = true
 	end
 	entry.plays += 1
 	entry.lastSeen = os.clock()
@@ -56,7 +69,7 @@ function Logger.log(rawId, name, owner)
 	if isNew then
 		Logger.Added:Fire(entry)
 	else
-		Logger.Updated:Fire(entry)
+		Logger.Updated:Fire(entry, changed)
 	end
 	return entry, isNew
 end
@@ -66,7 +79,7 @@ function Logger.get(id)
 end
 
 -- filter = { text = "lowercase search", onlyOwner = "PlayerName" | nil }
--- Returns entries sorted most-recently-played first.
+-- Returns entries sorted newest first (by when they were first seen), so the list stays stable.
 function Logger.list(filter)
 	filter = filter or {}
 	local text = filter.text or ""
@@ -85,7 +98,7 @@ function Logger.list(filter)
 		end
 	end
 	table.sort(out, function(a, b)
-		return a.lastSeen > b.lastSeen
+		return a.order > b.order
 	end)
 	return out
 end
@@ -93,6 +106,7 @@ end
 function Logger.clear()
 	table.clear(Logger.entries)
 	Logger.count = 0
+	Logger._order = 0
 	Logger.Cleared:Fire()
 end
 

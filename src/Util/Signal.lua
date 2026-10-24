@@ -17,7 +17,10 @@ end
 
 function Signal:Fire(...)
 	for fn in pairs(self._handlers) do
-		task.spawn(fn, ...)
+		local ok, err = pcall(fn, ...)
+		if not ok then
+			warn(err)
+		end
 	end
 end
 

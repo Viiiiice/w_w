@@ -31,6 +31,7 @@ function AnimationLogger.build(Tab, ctx)
 		selectedId = nil,
 		labelToId = {},
 		dirty = true,
+		detailsDirty = false,
 	}
 
 	local function notify(title, content)
@@ -233,12 +234,18 @@ function AnimationLogger.build(Tab, ctx)
 
 	maid:Give(Logger.Added:Connect(function(entry)
 		state.dirty = true
-		if state.notify then
+		local now = os.clock()
+		if state.notify and now - (state.lastNotify or 0) > 0.5 then
+			state.lastNotify = now
 			notify("New animation", label(entry))
 		end
 	end))
-	maid:Give(Logger.Updated:Connect(function()
-		state.dirty = true
+	maid:Give(Logger.Updated:Connect(function(entry, changed)
+		if changed then
+			state.dirty = true
+		elseif entry.id == state.selectedId then
+			state.detailsDirty = true
+		end
 	end))
 	maid:Give(Logger.Cleared:Connect(function()
 		state.selectedId = nil
@@ -249,7 +256,11 @@ function AnimationLogger.build(Tab, ctx)
 		while not Fluent.Unloaded do
 			if state.dirty then
 				state.dirty = false
+				state.detailsDirty = false
 				pcall(refresh)
+			elseif state.detailsDirty then
+				state.detailsDirty = false
+				pcall(showDetails)
 			end
 			task.wait(Config.AnimationLogger.RefreshInterval)
 		end
