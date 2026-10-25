@@ -707,7 +707,7 @@ local function build()
 	})
 	ui.rows = {}
 
-	for _, signal in ipairs({ Logger.Added, Logger.Cleared }) do
+	for _, signal in ipairs({ Logger.Added, Logger.Cleared, Logger.Loaded }) do
 		uiMaid:Connect(signal, function()
 			state.listDirty = true
 		end)

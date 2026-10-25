@@ -379,6 +379,9 @@ function AutoReact.build(Tab, ctx)
 		state.summaryDirty = true
 		list.markDirty()
 	end)
+	maid:Connect(Logger.Loaded, function()
+		list.markDirty()
+	end)
 	maid:Connect(Logger.Added, function(entry)
 		if Reactions.get(entry.id) then
 			list.markDirty()
@@ -421,6 +424,12 @@ function AutoReact.build(Tab, ctx)
 	end)
 
 	Engine.start(maid)
+
+	local ids = {}
+	for id in pairs(Reactions.data) do
+		ids[id] = true
+	end
+	Logger.seed(ids)
 end
 
 return AutoReact

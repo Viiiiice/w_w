@@ -164,7 +164,8 @@ function AnimationLogger.build(Tab, ctx)
 				and {
 					short(e.name, 34),
 					"ID: " .. e.id,
-					short("Played by: " .. table.concat(e.ownerList, ", "), 34),
+					#e.ownerList > 0 and short("Played by: " .. table.concat(e.ownerList, ", "), 34)
+						or "Saved, not played yet",
 					"Times played: " .. e.plays,
 				}
 			or { "Nothing selected.", "", "", "" }
@@ -279,6 +280,10 @@ function AnimationLogger.build(Tab, ctx)
 			state.detailsDirty = true
 		end
 	end)
+	maid:Connect(Logger.Loaded, function()
+		changed()
+		state.detailsDirty = true
+	end)
 	maid:Connect(Logger.Cleared, function()
 		state.selectedId = nil
 		state.detailsDirty = true
@@ -299,6 +304,7 @@ function AnimationLogger.build(Tab, ctx)
 		end
 	end)
 
+	Logger.load()
 	Tracker.start(maid)
 	maid:Give(PreviewWindow.destroy)
 end
