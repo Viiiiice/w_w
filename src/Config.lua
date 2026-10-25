@@ -16,7 +16,19 @@ return {
 
 	AnimationLogger = {
 		SaveFolder = "w_w/animations",
+		ScanFolder = "Alive",
 		MaxDropdownItems = 200,
 		RefreshInterval = 0.5,
+	},
+
+	AutoReact = {
+		Folder = "w_w/reactions",
+		Range = 18,
+		Lead = 0.08,
+		BlockHold = 0.45,
+		LearnWindow = 1.5,
+		Cooldown = 0.3,
+		MaxSamples = 8,
+		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},
 }

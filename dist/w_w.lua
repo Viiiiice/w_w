@@ -37,8 +37,20 @@ return {
 
 	AnimationLogger = {
 		SaveFolder = "w_w/animations",
+		ScanFolder = "Alive",
 		MaxDropdownItems = 200,
 		RefreshInterval = 0.5,
+	},
+
+	AutoReact = {
+		Folder = "w_w/reactions",
+		Range = 18,
+		Lead = 0.08,
+		BlockHold = 0.45,
+		LearnWindow = 1.5,
+		Cooldown = 0.3,
+		MaxSamples = 8,
+		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},
 }
 end
@@ -74,7 +86,7 @@ function Exporter.save(entries)
 	if not ok then
 		return false, tostring(err)
 	end
-
+	
 	return true, path
 end
 
@@ -82,29 +94,18 @@ return Exporter
 end
 
 __modules["Features/AnimationLogger/Logger"] = function()
--- Central store of every animation seen. Everything else reads from here.
 local Signal = require("Util/Signal")
 
 local Logger = {
 	paused = false,
-	entries = {}, -- [id] = Entry
+	entries = {},
 	count = 0,
 	_order = 0,
 
-	Added = Signal.new(), -- (entry) first time an id is seen
-	Updated = Signal.new(), -- (entry) seen again / new owner
+	Added = Signal.new(),
+	Updated = Signal.new(),
 	Cleared = Signal.new(),
 }
-
---[[ Entry:
-	id        string   numeric asset id
-	name      string   best name we've found
-	owners    {[name]=true}
-	ownerList {string}
-	plays     number
-	lastSeen  number   os.clock() of last play
-	order     number   increases with each new id, used for stable sorting
-]]
 
 local GENERIC_NAMES = { [""] = true, Animation = true, AnimationTrack = true }
 
@@ -116,6 +117,7 @@ function Logger.log(rawId, name, owner)
 	if Logger.paused then
 		return nil, false
 	end
+	
 	local id = cleanId(rawId)
 	if not id or id == "0" then
 		return nil, false
@@ -147,6 +149,7 @@ function Logger.log(rawId, name, owner)
 		table.insert(entry.ownerList, owner)
 		changed = true
 	end
+
 	entry.plays += 1
 	entry.lastSeen = os.clock()
 
@@ -155,6 +158,7 @@ function Logger.log(rawId, name, owner)
 	else
 		Logger.Updated:Fire(entry, changed)
 	end
+
 	return entry, isNew
 end
 
@@ -162,8 +166,6 @@ function Logger.get(id)
 	return Logger.entries[id]
 end
 
--- filter = { text = "lowercase search", onlyOwner = "PlayerName" | nil }
--- Returns entries sorted newest first (by when they were first seen), so the list stays stable.
 function Logger.list(filter)
 	filter = filter or {}
 	local text = filter.text or ""
@@ -173,10 +175,12 @@ function Logger.list(filter)
 		if filter.onlyOwner and not e.owners[filter.onlyOwner] then
 			ok = false
 		end
+
 		if ok and text ~= "" then
 			local hay = (e.name .. " " .. e.id .. " " .. table.concat(e.ownerList, " ")):lower()
 			ok = hay:find(text, 1, true) ~= nil
 		end
+
 		if ok then
 			table.insert(out, e)
 		end
@@ -250,6 +254,7 @@ local Services = require("Util/Services")
 local Maid = require("Util/Maid")
 local Rig = require("Features/AnimationLogger/Rig")
 local Logger = require("Features/AnimationLogger/Logger")
+local Reactions = require("Features/AutoReact/Reactions")
 
 local UserInputService = Services.UserInputService
 local RunService = Services.RunService
@@ -270,7 +275,7 @@ local THEME = {
 local SPEEDS = { 0.25, 0.5, 1, 1.5, 2 }
 local MAX_LIST_ITEMS = 200
 local LIST_WIDTH = 190
-local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 340)
+local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 420)
 local MAX_SIZE = Vector2.new(1400, 1000)
 local BLOCK_CAMERA_ACTION = "w_wPreviewBlockCamera"
 
@@ -481,6 +486,22 @@ local function refreshList()
 	ui.empty.Text = Logger.count == 0 and "No animations logged yet." or "No matches."
 end
 
+local function updateReaction()
+	if not ui.reaction then
+		return
+	end
+	local id = state.entry and state.entry.id
+	local r = id and Reactions.get(id)
+	for action, b in pairs(ui.actionButtons) do
+		b.BackgroundColor3 = (r and r.action == action) and THEME.accent or THEME.button
+	end
+	if not id then
+		ui.reaction.Text = "Pick an animation to set a reaction."
+	else
+		ui.reaction.Text = Reactions.describe(id) .. "  •  scrub to the hit frame, then Set hit here"
+	end
+end
+
 local function build()
 	gui = new("ScreenGui", {
 		Name = "w_wPreview",
@@ -492,8 +513,8 @@ local function build()
 	})
 
 	local main = new("Frame", {
-		Size = UDim2.fromOffset(320 + LIST_WIDTH, 400),
-		Position = UDim2.new(1, -(340 + LIST_WIDTH), 0.5, -200),
+		Size = UDim2.fromOffset(320 + LIST_WIDTH, 460),
+		Position = UDim2.new(1, -(340 + LIST_WIDTH), 0.5, -230),
 		BackgroundColor3 = THEME.bg,
 		BorderSizePixel = 0,
 		Parent = gui,
@@ -630,7 +651,7 @@ local function build()
 	})
 
 	ui.viewport = new("ViewportFrame", {
-		Size = UDim2.new(1, -16, 1, -150),
+		Size = UDim2.new(1, -16, 1, -200),
 		Position = UDim2.fromOffset(8, 40),
 		BackgroundColor3 = THEME.viewport,
 		Ambient = Color3.fromRGB(170, 170, 180),
@@ -695,7 +716,7 @@ local function build()
 
 	ui.timeline = new("TextButton", {
 		Size = UDim2.new(1, -16, 0, 10),
-		Position = UDim2.new(0, 8, 1, -103),
+		Position = UDim2.new(0, 8, 1, -153),
 		BackgroundColor3 = THEME.button,
 		Text = "",
 		AutoButtonColor = false,
@@ -756,7 +777,7 @@ local function build()
 
 	local row1 = new("Frame", {
 		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -86),
+		Position = UDim2.new(0, 8, 1, -136),
 		BackgroundTransparency = 1,
 		Parent = content,
 	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
@@ -814,7 +835,7 @@ local function build()
 
 	local row2 = new("Frame", {
 		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -54),
+		Position = UDim2.new(0, 8, 1, -104),
 		BackgroundTransparency = 1,
 		Parent = content,
 	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
@@ -828,6 +849,74 @@ local function build()
 
 	local camButton = button("Reset camera", 96, row2)
 	camButton.MouseButton1Click:Connect(resetCamera)
+
+	local row3 = new("Frame", {
+		Size = UDim2.new(1, -16, 0, 26),
+		Position = UDim2.new(0, 8, 1, -72),
+		BackgroundTransparency = 1,
+		Parent = content,
+	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
+
+	ui.actionButtons = {}
+	for _, action in ipairs(Reactions.ACTIONS) do
+		local b = button(action, 48, row3)
+		ui.actionButtons[action] = b
+		b.MouseButton1Click:Connect(function()
+			if not state.entry then
+				return
+			end
+			local r = Reactions.get(state.entry.id)
+			if r and r.action == action and not r.learned then
+				Reactions.setAction(state.entry.id, nil)
+			else
+				Reactions.setAction(state.entry.id, action)
+			end
+		end)
+	end
+
+	local hitButton = button("Set hit here", 78, row3)
+	hitButton.MouseButton1Click:Connect(function()
+		if state.entry and state.track then
+			Reactions.setHit(state.entry.id, state.track.TimePosition)
+		end
+	end)
+
+	local clearButton = button("Clear", 44, row3)
+	clearButton.MouseButton1Click:Connect(function()
+		if state.entry then
+			Reactions.clear(state.entry.id)
+		end
+	end)
+
+	ui.reaction = new("TextLabel", {
+		Size = UDim2.new(1, -16, 0, 14),
+		Position = UDim2.new(0, 8, 1, -42),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = THEME.sub,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = content,
+	})
+
+	ui.hitMarker = new("Frame", {
+		Size = UDim2.new(0, 2, 1, 6),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		BackgroundColor3 = Color3.fromRGB(250, 110, 110),
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 3,
+		Parent = ui.timeline,
+	})
+
+	uiMaid:Connect(Reactions.Changed, function(id)
+		if state.entry and (id == nil or id == state.entry.id) then
+			updateReaction()
+		end
+	end)
 
 	ui.status = new("TextLabel", {
 		Size = UDim2.new(1, -16, 0, 20),
@@ -934,6 +1023,13 @@ local function step()
 		* CFrame.new(0, 0, state.zoom)
 
 	local track = state.track
+	local r = state.entry and Reactions.get(state.entry.id)
+	if r and r.hit and track and track.Length > 0 then
+		ui.hitMarker.Visible = true
+		ui.hitMarker.Position = UDim2.fromScale(math.clamp(r.hit / track.Length, 0, 1), 0.5)
+	else
+		ui.hitMarker.Visible = false
+	end
 	if state.finished then
 		ui.progress.Size = UDim2.fromScale(1, 1)
 	elseif track and track.Length > 0 then
@@ -961,6 +1057,7 @@ function PreviewWindow.open()
 		ui.title.Text = "Preview"
 		setStatus("Pick an animation from the list.")
 	end
+	updateReaction()
 end
 
 function PreviewWindow.show(entry)
@@ -972,6 +1069,7 @@ function PreviewWindow.show(entry)
 	state.playing = true
 
 	rebuildRig()
+	updateReaction()
 end
 
 function PreviewWindow.close()
@@ -1014,13 +1112,14 @@ end
 
 __modules["Features/AnimationLogger/Rig"] = function()
 local Services = require("Util/Services")
+local Config = require("Config")
 
 local Players = Services.Players
 local LocalPlayer = Players.LocalPlayer
 
 local Rig = {}
 
-local STRIP = { "LuaSourceContainer", "Sound", "ForceField", "BillboardGui", "ParticleEmitter", "Trail" }
+local STRIP = {"LuaSourceContainer", "Sound", "ForceField", "BillboardGui", "ParticleEmitter", "Trail"}
 
 local function shouldStrip(inst)
 	for _, class in ipairs(STRIP) do
@@ -1031,6 +1130,7 @@ local function shouldStrip(inst)
 	return false
 end
 
+
 function Rig.findSource(kind, ownerName)
 	if kind == "Owner" and ownerName and not ownerName:find("^scan:") then
 		local player = Players:FindFirstChild(ownerName)
@@ -1038,10 +1138,10 @@ function Rig.findSource(kind, ownerName)
 			return player.Character
 		end
 
-		for _, inst in ipairs(workspace:GetDescendants()) do
-			if inst:IsA("Model") and inst.Name == ownerName and inst:FindFirstChildOfClass("Humanoid") then
-				return inst
-			end
+		local folder = workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+		local model = folder and folder:FindFirstChild(ownerName)
+		if model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
+			return model
 		end
 	end
 
@@ -1091,7 +1191,7 @@ function Rig.build(source)
 
 	rig.PrimaryPart = root
 	rig:PivotTo(CFrame.new())
-
+	
 	return rig, animator, root
 end
 
@@ -1145,20 +1245,21 @@ end
 
 __modules["Features/AnimationLogger/Tracker"] = function()
 local Services = require("Util/Services")
+local Config = require("Config")
+local Maid = require("Util/Maid")
+local Signal = require("Util/Signal")
 local Logger = require("Features/AnimationLogger/Logger")
 
 local Players = Services.Players
 
-local Tracker = {}
+local Tracker = {
+	Played = Signal.new(),
+}
 
-local hooked = {}
+local characters = {}
+local folderMaid
 
-local function ownerOf(animator)
-	local model = animator:FindFirstAncestorOfClass("Model")
-	if not model then
-		return "?"
-	end
-
+local function ownerOf(model)
 	local player = Players:GetPlayerFromCharacter(model)
 
 	return player and player.Name or model.Name
@@ -1173,60 +1274,124 @@ local function nameOf(track)
 	return name
 end
 
-local function onTrack(animator, track)
+local function onTrack(model, track)
 	local anim = track.Animation
 	if anim then
-		Logger.log(anim.AnimationId, nameOf(track), ownerOf(animator))
+		Logger.log(anim.AnimationId, nameOf(track), ownerOf(model))
+		Tracker.Played:Fire(model, track, anim.AnimationId)
 	end
 end
 
-local function hookAnimator(animator, maid)
-	if hooked[animator] then
+local function hookAnimator(model, charMaid, animators, animator)
+	if animators[animator] then
 		return
 	end
-	local played, ancestry
-	played = animator.AnimationPlayed:Connect(function(track)
-		onTrack(animator, track)
+
+	local animMaid = charMaid:Extend()
+	animators[animator] = animMaid
+
+	animMaid:Connect(animator.AnimationPlayed, function(track)
+		onTrack(model, track)
 	end)
-	ancestry = animator.AncestryChanged:Connect(function()
-		if not animator:IsDescendantOf(workspace) then
-			played:Disconnect()
-			ancestry:Disconnect()
-			hooked[animator] = nil
+	animMaid:Connect(animator.AncestryChanged, function()
+		if not animator:IsDescendantOf(model) then
+			animators[animator] = nil
+			charMaid:Remove(animMaid)
 		end
 	end)
-	hooked[animator] = { played, ancestry }
 
 	local ok, playing = pcall(animator.GetPlayingAnimationTracks, animator)
 	if ok then
 		for _, track in ipairs(playing) do
-			onTrack(animator, track)
+			onTrack(model, track)
 		end
 	end
 end
 
-local function tryHook(inst, maid)
-	if inst:IsA("Animator") then
-		hookAnimator(inst, maid)
+local function unhookCharacter(model)
+	local charMaid = characters[model]
+	if charMaid then
+		characters[model] = nil
+		charMaid:Clean()
 	end
+end
+
+local function hookCharacter(model)
+	if characters[model] or not model:IsA("Model") then
+		return
+	end
+
+	local charMaid = Maid.new()
+	local animators = {}
+	characters[model] = charMaid
+	charMaid:Give(function()
+		table.clear(animators)
+	end)
+
+	charMaid:Connect(model.DescendantAdded, function(inst)
+		if inst:IsA("Animator") then
+			hookAnimator(model, charMaid, animators, inst)
+		end
+	end)
+
+	for _, inst in ipairs(model:GetDescendants()) do
+		if inst:IsA("Animator") then
+			hookAnimator(model, charMaid, animators, inst)
+		end
+	end
+end
+
+local function unhookAll()
+	for model in pairs(characters) do
+		unhookCharacter(model)
+	end
+end
+
+local function watchFolder(folder)
+	if folderMaid then
+		folderMaid:Clean()
+	end
+	unhookAll()
+	folderMaid = Maid.new()
+
+	folderMaid:Connect(folder.ChildAdded, hookCharacter)
+	folderMaid:Connect(folder.ChildRemoved, unhookCharacter)
+	folderMaid:Connect(folder.AncestryChanged, function()
+		if folder.Parent ~= workspace then
+			folderMaid:Clean()
+			unhookAll()
+		end
+	end)
+
+	for _, model in ipairs(folder:GetChildren()) do
+		hookCharacter(model)
+	end
+end
+
+function Tracker.folder()
+	return workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
 end
 
 function Tracker.start(maid)
-	for _, inst in ipairs(workspace:GetDescendants()) do
-		tryHook(inst, maid)
-	end
+	local name = Config.AnimationLogger.ScanFolder
 
-	maid:Give(workspace.DescendantAdded:Connect(function(inst)
-		tryHook(inst, maid)
+	maid:Give(workspace.ChildAdded:Connect(function(child)
+		if child.Name == name then
+			watchFolder(child)
+		end
 	end))
 
+	local folder = Tracker.folder()
+	if folder then
+		watchFolder(folder)
+	end
+
 	maid:Give(function()
-		for _, connections in pairs(hooked) do
-			for _, connection in ipairs(connections) do
-				connection:Disconnect()
-			end
+		if folderMaid then
+			folderMaid:Clean()
+			folderMaid = nil
 		end
-		table.clear(hooked)
+		unhookAll()
 	end)
 end
 
@@ -1336,6 +1501,7 @@ function AnimationLogger.build(Tab, ctx)
 			details:SetDesc("Pick an animation above.")
 			return
 		end
+		
 		details:SetTitle(e.name)
 		details:SetDesc(
 			string.format(
@@ -1516,9 +1682,716 @@ end
 return AnimationLogger
 end
 
+__modules["Features/AutoReact/Engine"] = function()
+local Services = require("Util/Services")
+local Config = require("Config")
+local Maid = require("Util/Maid")
+local Signal = require("Util/Signal")
+local Tracker = require("Features/AnimationLogger/Tracker")
+local Reactions = require("Features/AutoReact/Reactions")
+
+local Players = Services.Players
+local VirtualInputManager = Services.VirtualInputManager
+local LocalPlayer = Players.LocalPlayer
+
+local Engine = {
+	settings = {
+		enabled = false,
+		learn = false,
+		useLearned = true,
+		learnAction = "Parry",
+		range = Config.AutoReact.Range,
+		lead = Config.AutoReact.Lead,
+		blockHold = Config.AutoReact.BlockHold,
+		learnWindow = Config.AutoReact.LearnWindow,
+		inputMethod = "Auto",
+		keys = table.clone(Config.AutoReact.Keys),
+	},
+	Fired = Signal.new(),
+	Learned = Signal.new(),
+}
+
+local VK = {
+	Space = 0x20,
+	Tab = 0x09,
+	LeftShift = 0xA0,
+	RightShift = 0xA1,
+	LeftControl = 0xA2,
+	RightControl = 0xA3,
+	LeftAlt = 0xA4,
+	RightAlt = 0xA5,
+	Zero = 0x30,
+	One = 0x31,
+	Two = 0x32,
+	Three = 0x33,
+	Four = 0x34,
+	Five = 0x35,
+	Six = 0x36,
+	Seven = 0x37,
+	Eight = 0x38,
+	Nine = 0x39,
+}
+
+local pending = {}
+local lastFire = {}
+local held = {}
+
+local function keyCode(name)
+	local ok, code = pcall(function()
+		return Enum.KeyCode[name]
+	end)
+	return ok and code or nil
+end
+
+local function vkFor(code)
+	if VK[code.Name] then
+		return VK[code.Name]
+	end
+	if #code.Name == 1 and code.Name:match("%a") then
+		return string.byte(code.Name:upper())
+	end
+end
+
+local function useKeypress(code)
+	local method = Engine.settings.inputMethod
+	if method == "VirtualInputManager" then
+		return false
+	end
+	return keypress ~= nil and keyrelease ~= nil and vkFor(code) ~= nil
+end
+
+local function press(code)
+	if useKeypress(code) then
+		keypress(vkFor(code))
+	else
+		VirtualInputManager:SendKeyEvent(true, code, false, game)
+	end
+end
+
+local function release(code)
+	if useKeypress(code) then
+		keyrelease(vkFor(code))
+	else
+		VirtualInputManager:SendKeyEvent(false, code, false, game)
+	end
+end
+
+function Engine.send(action)
+	local code = keyCode(Engine.settings.keys[action] or "")
+	if not code then
+		return false
+	end
+
+	local now = os.clock()
+	if now - (lastFire[action] or 0) < Config.AutoReact.Cooldown then
+		return false
+	end
+	lastFire[action] = now
+
+	if action == "Block" then
+		held[code] = (held[code] or 0) + 1
+		pcall(press, code)
+		task.delay(Engine.settings.blockHold, function()
+			held[code] -= 1
+			if held[code] <= 0 then
+				held[code] = nil
+				pcall(release, code)
+			end
+		end)
+	else
+		pcall(press, code)
+		task.delay(0.03, pcall, release, code)
+	end
+
+	Engine.Fired:Fire(action)
+	return true
+end
+
+local function rootOf(model)
+	return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
+end
+
+local function distanceTo(model)
+	local mine = rootOf(LocalPlayer.Character)
+	local theirs = rootOf(model)
+	if not mine or not theirs then
+		return math.huge
+	end
+	return (mine.Position - theirs.Position).Magnitude
+end
+
+local function trackSpeed(track)
+	local ok, speed = pcall(function()
+		return track.Speed
+	end)
+	return (ok and speed and speed > 0.01) and speed or 1
+end
+
+local function prune(now)
+	for i = #pending, 1, -1 do
+		local p = pending[i]
+		if now - p.start > Engine.settings.learnWindow or not p.model.Parent then
+			table.remove(pending, i)
+		end
+	end
+end
+
+local function onPlayed(maid, model, track, rawId)
+	if model == LocalPlayer.Character then
+		return
+	end
+	local s = Engine.settings
+	if not s.enabled and not s.learn then
+		return
+	end
+	if distanceTo(model) > s.range then
+		return
+	end
+
+	local id = Reactions.cleanId(rawId)
+	if not id then
+		return
+	end
+
+	if s.learn and not track.Looped then
+		prune(os.clock())
+		table.insert(pending, { id = id, model = model, track = track, start = os.clock() })
+	end
+
+	if not s.enabled then
+		return
+	end
+	local r = Reactions.get(id)
+	if not r or not r.action or not r.hit or (r.learned and not s.useLearned) then
+		return
+	end
+
+	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead)
+	local thread
+	thread = task.delay(wait, function()
+		maid:Remove(thread, true)
+		if not Engine.settings.enabled then
+			return
+		end
+		if not track.IsPlaying and wait > 0.05 then
+			return
+		end
+		if distanceTo(model) > Engine.settings.range then
+			return
+		end
+		Engine.send(r.action)
+	end)
+	maid:Give(thread)
+end
+
+local function onDamaged()
+	local now = os.clock()
+	prune(now)
+	local best
+	for _, p in ipairs(pending) do
+		if now - p.start > 0.05 and (not best or p.start > best.start) then
+			if distanceTo(p.model) <= Engine.settings.range + 6 then
+				best = p
+			end
+		end
+	end
+	if not best then
+		return
+	end
+
+	local hit = now - best.start
+	if best.track.IsPlaying then
+		local ok, position = pcall(function()
+			return best.track.TimePosition
+		end)
+		if ok and position and position > 0 then
+			hit = position
+		end
+	end
+
+	table.remove(pending, table.find(pending, best))
+	local r = Reactions.addSample(best.id, hit, Engine.settings.learnAction)
+	Engine.Learned:Fire(best.id, r)
+end
+
+local function watchCharacter(charMaid, character)
+	charMaid:Clean()
+	if not character then
+		return
+	end
+	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 10)
+	if not humanoid or character ~= LocalPlayer.Character then
+		return
+	end
+
+	local last = humanoid.Health
+	charMaid:Connect(humanoid.HealthChanged, function(health)
+		if health < last - 0.01 and Engine.settings.learn then
+			onDamaged()
+		end
+		last = health
+	end)
+end
+
+function Engine.start(maid)
+	Reactions.load()
+
+	local threads = maid:Extend()
+	maid:Connect(Tracker.Played, function(model, track, rawId)
+		onPlayed(threads, model, track, rawId)
+	end)
+
+	local charMaid = maid:Extend()
+	maid:Connect(LocalPlayer.CharacterAdded, function(character)
+		task.spawn(watchCharacter, charMaid, character)
+	end)
+	task.spawn(watchCharacter, charMaid, LocalPlayer.Character)
+
+	maid:Give(function()
+		table.clear(pending)
+		for code in pairs(held) do
+			pcall(release, code)
+		end
+		table.clear(held)
+	end)
+end
+
+return Engine
+end
+
+__modules["Features/AutoReact/Reactions"] = function()
+local Services = require("Util/Services")
+local Config = require("Config")
+local Signal = require("Util/Signal")
+
+local HttpService = Services.HttpService
+
+local Reactions = {
+	ACTIONS = { "Parry", "Block", "Dash" },
+	data = {},
+	Changed = Signal.new(),
+}
+
+local saveQueued = false
+
+local function path()
+	return string.format("%s/%d.json", Config.AutoReact.Folder, game.PlaceId)
+end
+
+local function cleanId(raw)
+	return raw and tostring(raw):match("%d+")
+end
+
+Reactions.cleanId = cleanId
+
+function Reactions.load()
+	table.clear(Reactions.data)
+	if not (readfile and isfile) then
+		return
+	end
+	local ok, raw = pcall(function()
+		return isfile(path()) and readfile(path())
+	end)
+	if not ok or not raw then
+		return
+	end
+	local decoded, data = pcall(HttpService.JSONDecode, HttpService, raw)
+	if decoded and type(data) == "table" then
+		for id, r in pairs(data) do
+			if type(r) == "table" then
+				r.samples = r.samples or {}
+				Reactions.data[tostring(id)] = r
+			end
+		end
+	end
+	Reactions.Changed:Fire()
+end
+
+function Reactions.save()
+	if saveQueued or not writefile then
+		return
+	end
+	saveQueued = true
+	task.delay(1, function()
+		saveQueued = false
+		local folder = Config.AutoReact.Folder
+		if makefolder and not (isfolder and isfolder(folder)) then
+			pcall(makefolder, Config.RootFolder)
+			pcall(makefolder, folder)
+		end
+		local ok, encoded = pcall(HttpService.JSONEncode, HttpService, Reactions.data)
+		if ok then
+			pcall(writefile, path(), encoded)
+		end
+	end)
+end
+
+function Reactions.get(id)
+	return Reactions.data[cleanId(id) or ""]
+end
+
+local function ensure(id)
+	local r = Reactions.data[id]
+	if not r then
+		r = { samples = {} }
+		Reactions.data[id] = r
+	end
+	return r
+end
+
+function Reactions.setAction(id, action)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	local r = ensure(id)
+	r.action = action
+	r.learned = false
+	Reactions.Changed:Fire(id)
+	Reactions.save()
+end
+
+function Reactions.setHit(id, hit)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	local r = ensure(id)
+	r.hit = math.max(0, hit)
+	r.manualHit = true
+	Reactions.Changed:Fire(id)
+	Reactions.save()
+end
+
+function Reactions.addSample(id, hit, defaultAction)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	local r = ensure(id)
+	local samples = r.samples
+	table.insert(samples, hit)
+	while #samples > Config.AutoReact.MaxSamples do
+		table.remove(samples, 1)
+	end
+
+	if not r.manualHit then
+		local sorted = table.clone(samples)
+		table.sort(sorted)
+		r.hit = sorted[math.ceil(#sorted / 2)]
+	end
+	if not r.action then
+		r.action = defaultAction
+		r.learned = true
+	end
+	Reactions.Changed:Fire(id)
+	Reactions.save()
+	return r
+end
+
+function Reactions.clear(id)
+	id = cleanId(id)
+	if id and Reactions.data[id] then
+		Reactions.data[id] = nil
+		Reactions.Changed:Fire(id)
+		Reactions.save()
+	end
+end
+
+function Reactions.clearAll()
+	table.clear(Reactions.data)
+	Reactions.Changed:Fire()
+	Reactions.save()
+end
+
+function Reactions.count()
+	local n = 0
+	for _ in pairs(Reactions.data) do
+		n += 1
+	end
+	return n
+end
+
+function Reactions.describe(id)
+	local r = Reactions.get(id)
+	if not r or not r.action then
+		return "No reaction set"
+	end
+	local hit = r.hit and string.format("%.2fs", r.hit) or "no hit time"
+	local extra = #r.samples > 0 and string.format(", %d sample(s)", #r.samples) or ""
+	return string.format("%s at %s%s%s", r.action, hit, extra, r.learned and " (learned)" or "")
+end
+
+return Reactions
+end
+
+__modules["Features/AutoReact"] = function()
+local Logger = require("Features/AnimationLogger/Logger")
+local PreviewWindow = require("Features/AnimationLogger/PreviewWindow")
+local Reactions = require("Features/AutoReact/Reactions")
+local Engine = require("Features/AutoReact/Engine")
+
+local AutoReact = {
+	Title = "Auto react",
+	Icon = "shield",
+	IgnoreOptions = { "ReactSaved" },
+}
+
+local function labelFor(id)
+	local entry = Logger.get(id)
+	local name = entry and entry.name or "Unknown"
+	return string.format("%s [%s] - %s", name, id, Reactions.describe(id))
+end
+
+function AutoReact.build(Tab, ctx)
+	local Window, Fluent, maid = ctx.Window, ctx.Fluent, ctx.maid
+	local Options = Fluent.Options
+	local settings = Engine.settings
+	local state = { labelToId = {}, selectedId = nil, dirty = true, notifyLearn = true }
+
+	local function notify(title, content)
+		Fluent:Notify({ Title = title, Content = content, Duration = 3 })
+	end
+
+	local Main = Tab:AddSection("Auto react")
+
+	Main:AddParagraph({
+		Title = "How it works",
+		Content = "When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning below.",
+	})
+
+	Main:AddToggle("ReactEnabled", { Title = "Enabled", Default = false })
+	Options.ReactEnabled:OnChanged(function(value)
+		settings.enabled = value
+	end)
+
+	Main:AddToggle("ReactUseLearned", { Title = "React to learned animations", Default = true })
+	Options.ReactUseLearned:OnChanged(function(value)
+		settings.useLearned = value
+	end)
+
+	Main:AddSlider("ReactRange", {
+		Title = "Range (studs)",
+		Default = settings.range,
+		Min = 4,
+		Max = 80,
+		Rounding = 0,
+	})
+	Options.ReactRange:OnChanged(function(value)
+		settings.range = value
+	end)
+
+	Main:AddSlider("ReactLead", {
+		Title = "Press early (ms)",
+		Description = "Raise this if you're still getting hit",
+		Default = math.floor(settings.lead * 1000),
+		Min = 0,
+		Max = 400,
+		Rounding = 0,
+	})
+	Options.ReactLead:OnChanged(function(value)
+		settings.lead = value / 1000
+	end)
+
+	Main:AddSlider("ReactBlockHold", {
+		Title = "Block hold time (s)",
+		Default = settings.blockHold,
+		Min = 0.1,
+		Max = 3,
+		Rounding = 2,
+	})
+	Options.ReactBlockHold:OnChanged(function(value)
+		settings.blockHold = value
+	end)
+
+	local Keys = Tab:AddSection("Keys")
+
+	for _, action in ipairs(Reactions.ACTIONS) do
+		local id = "ReactKey" .. action
+		Keys:AddInput(id, {
+			Title = action .. " key",
+			Default = settings.keys[action],
+			Placeholder = "F",
+			Numeric = false,
+			Finished = true,
+		})
+		Options[id]:OnChanged(function(value)
+			local ok = pcall(function()
+				return Enum.KeyCode[value]
+			end)
+			if ok and value ~= "" then
+				settings.keys[action] = value
+			end
+		end)
+		Keys:AddButton({
+			Title = "Test " .. action,
+			Description = "Sends the " .. action:lower() .. " input now",
+			Callback = function()
+				if not Engine.send(action) then
+					notify("Couldn't send", "Check the key name (like F, Q, Space, LeftShift)")
+				end
+			end,
+		})
+	end
+
+	Keys:AddDropdown("ReactInputMethod", {
+		Title = "Input method",
+		Description = "Auto uses keypress when available, otherwise VirtualInputManager",
+		Values = { "Auto", "VirtualInputManager" },
+		Default = "Auto",
+	})
+	Options.ReactInputMethod:OnChanged(function(value)
+		settings.inputMethod = value
+	end)
+
+	local Learn = Tab:AddSection("Learn from damage")
+
+	Learn:AddParagraph({
+		Title = "Learning",
+		Content = "When you take damage, the most recent attack animation from someone in range gets saved with that hit time. Get hit a couple of times by a move to make its timing reliable.",
+	})
+
+	Learn:AddToggle("ReactLearn", { Title = "Learn from damage", Default = false })
+	Options.ReactLearn:OnChanged(function(value)
+		settings.learn = value
+	end)
+
+	Learn:AddDropdown("ReactLearnAction", {
+		Title = "Learned animations use",
+		Values = Reactions.ACTIONS,
+		Default = settings.learnAction,
+	})
+	Options.ReactLearnAction:OnChanged(function(value)
+		settings.learnAction = value
+	end)
+
+	Learn:AddSlider("ReactLearnWindow", {
+		Title = "Max time to hit (s)",
+		Description = "Animations that started longer ago than this are ignored",
+		Default = settings.learnWindow,
+		Min = 0.3,
+		Max = 4,
+		Rounding = 1,
+	})
+	Options.ReactLearnWindow:OnChanged(function(value)
+		settings.learnWindow = value
+	end)
+
+	Learn:AddToggle("ReactNotifyLearn", { Title = "Notify when something is learned", Default = true })
+	Options.ReactNotifyLearn:OnChanged(function(value)
+		state.notifyLearn = value
+	end)
+
+	local Saved = Tab:AddSection("Saved reactions")
+
+	local summary = Saved:AddParagraph({ Title = "0 saved", Content = "Saved per game." })
+
+	local dropdown = Saved:AddDropdown("ReactSaved", {
+		Title = "Reactions",
+		Values = {},
+		Multi = false,
+	})
+	Options.ReactSaved:OnChanged(function(value)
+		state.selectedId = value and state.labelToId[value] or nil
+	end)
+
+	local function refresh()
+		local ids = {}
+		for id, r in pairs(Reactions.data) do
+			if r.action or r.hit then
+				table.insert(ids, id)
+			end
+		end
+		table.sort(ids)
+		local values, labelToId = {}, {}
+		for _, id in ipairs(ids) do
+			local l = labelFor(id)
+			table.insert(values, l)
+			labelToId[l] = id
+		end
+		state.labelToId = labelToId
+		dropdown:SetValues(values)
+		summary:SetTitle(string.format("%d saved", #ids))
+	end
+
+	local function withSelected(fn)
+		return function()
+			if not state.selectedId then
+				notify("Nothing selected", "Pick a reaction first.")
+				return
+			end
+			fn(state.selectedId)
+		end
+	end
+
+	Saved:AddButton({
+		Title = "Open in preview",
+		Callback = withSelected(function(id)
+			local entry = Logger.get(id)
+			if entry then
+				PreviewWindow.show(entry)
+			else
+				notify("Not logged yet", "That animation hasn't played this session.")
+			end
+		end),
+	})
+
+	Saved:AddButton({
+		Title = "Delete selected",
+		Callback = withSelected(function(id)
+			Reactions.clear(id)
+			state.selectedId = nil
+		end),
+	})
+
+	Saved:AddButton({
+		Title = "Delete all",
+		Callback = function()
+			Window:Dialog({
+				Title = "Delete all reactions?",
+				Content = "This removes every saved reaction for this game.",
+				Buttons = {
+					{ Title = "Delete", Callback = Reactions.clearAll },
+					{ Title = "Cancel", Callback = function() end },
+				},
+			})
+		end,
+	})
+
+	maid:Connect(Reactions.Changed, function()
+		state.dirty = true
+	end)
+	maid:Connect(Logger.Added, function(entry)
+		if Reactions.get(entry.id) then
+			state.dirty = true
+		end
+	end)
+	maid:Connect(Engine.Learned, function(id, r)
+		if state.notifyLearn and r then
+			notify("Learned", labelFor(id))
+		end
+	end)
+
+	task.spawn(function()
+		while not Fluent.Unloaded do
+			if state.dirty then
+				state.dirty = false
+				pcall(refresh)
+			end
+			task.wait(0.5)
+		end
+	end)
+
+	Engine.start(maid)
+end
+
+return AutoReact
+end
+
 __modules["Features/List"] = function()
 return {
 	require("Features/AnimationLogger"),
+	require("Features/AutoReact"),
 }
 end
 
@@ -1630,29 +2503,155 @@ __modules["Util/Maid"] = function()
 local Maid = {}
 Maid.__index = Maid
 
-function Maid.new()
-	return setmetatable({ _tasks = {} }, Maid)
+local function cleanup(item, method)
+	if method then
+		item[method](item)
+	elseif type(item) == "function" then
+		item()
+	elseif type(item) == "thread" then
+		if coroutine.status(item) ~= "dead" then
+			task.cancel(item)
+		end
+	elseif typeof(item) == "RBXScriptConnection" then
+		item:Disconnect()
+	elseif typeof(item) == "Instance" then
+		item:Destroy()
+	elseif type(item) == "table" then
+		if item.Destroy then
+			item:Destroy()
+		elseif item.Clean then
+			item:Clean()
+		elseif item.Disconnect then
+			item:Disconnect()
+		end
+	end
 end
 
-function Maid:Give(item)
-	table.insert(self._tasks, item)
+function Maid.new()
+	return setmetatable({ _tasks = {}, _keyed = {}, _cleaning = false }, Maid)
+end
+
+function Maid.is(value)
+	return getmetatable(value) == Maid
+end
+
+function Maid:Give(item, method)
+	if self._cleaning then
+		task.defer(cleanup, item, method)
+		return item
+	end
+	table.insert(self._tasks, { item, method })
 	return item
 end
 
-function Maid:Clean()
-	for _, item in ipairs(self._tasks) do
-		pcall(function()
-			if type(item) == "function" then
-				item()
-			elseif typeof(item) == "RBXScriptConnection" or (type(item) == "table" and item.Disconnect) then
-				item:Disconnect()
-			elseif typeof(item) == "Instance" then
-				item:Destroy()
-			end
-		end)
-	end
-	table.clear(self._tasks)
+Maid.Add = Maid.Give
+
+function Maid:Connect(signal, handler)
+	return self:Give(signal:Connect(handler))
 end
+
+function Maid:Once(signal, handler)
+	return self:Give(signal:Once(handler))
+end
+
+function Maid:BindToRenderStep(name, priority, handler)
+	local RunService = game:GetService("RunService")
+	RunService:BindToRenderStep(name, priority, handler)
+	self:Give(function()
+		RunService:UnbindFromRenderStep(name)
+	end)
+end
+
+function Maid:Spawn(fn, ...)
+	return self:Give(task.spawn(fn, ...))
+end
+
+function Maid:Delay(seconds, fn, ...)
+	return self:Give(task.delay(seconds, fn, ...))
+end
+
+function Maid:Extend()
+	return self:Give(Maid.new())
+end
+
+function Maid:Set(key, item, method)
+	local old = self._keyed[key]
+	self._keyed[key] = nil
+	if old then
+		pcall(cleanup, old[1], old[2])
+	end
+	if item ~= nil then
+		if self._cleaning then
+			task.defer(cleanup, item, method)
+		else
+			self._keyed[key] = { item, method }
+		end
+	end
+	return item
+end
+
+function Maid:Get(key)
+	local entry = self._keyed[key]
+	return entry and entry[1]
+end
+
+function Maid:Remove(item, keep)
+	for i = #self._tasks, 1, -1 do
+		local entry = self._tasks[i]
+		if entry[1] == item then
+			table.remove(self._tasks, i)
+			if not keep then
+				pcall(cleanup, entry[1], entry[2])
+			end
+			return true
+		end
+	end
+	return false
+end
+
+function Maid:AttachToInstance(instance)
+	return self:Give(instance.Destroying:Connect(function()
+		self:Clean()
+	end))
+end
+
+function Maid:Count()
+	local count = #self._tasks
+	for _ in pairs(self._keyed) do
+		count += 1
+	end
+	return count
+end
+
+function Maid:Clean()
+	if self._cleaning then
+		return
+	end
+	self._cleaning = true
+
+	local keyed = self._keyed
+	self._keyed = {}
+	for _, entry in pairs(keyed) do
+		local ok, err = pcall(cleanup, entry[1], entry[2])
+		if not ok then
+			warn("[w_w] maid cleanup failed:", err)
+		end
+	end
+
+	local tasks = self._tasks
+	self._tasks = {}
+	for i = #tasks, 1, -1 do
+		local ok, err = pcall(cleanup, tasks[i][1], tasks[i][2])
+		if not ok then
+			warn("[w_w] maid cleanup failed:", err)
+		end
+	end
+
+	self._cleaning = false
+end
+
+Maid.Destroy = Maid.Clean
+Maid.DoCleaning = Maid.Clean
 
 return Maid
 end

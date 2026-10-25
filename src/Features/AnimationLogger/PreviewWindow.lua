@@ -2,6 +2,7 @@ local Services = require("Util/Services")
 local Maid = require("Util/Maid")
 local Rig = require("Features/AnimationLogger/Rig")
 local Logger = require("Features/AnimationLogger/Logger")
+local Reactions = require("Features/AutoReact/Reactions")
 
 local UserInputService = Services.UserInputService
 local RunService = Services.RunService
@@ -22,7 +23,7 @@ local THEME = {
 local SPEEDS = { 0.25, 0.5, 1, 1.5, 2 }
 local MAX_LIST_ITEMS = 200
 local LIST_WIDTH = 190
-local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 340)
+local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 420)
 local MAX_SIZE = Vector2.new(1400, 1000)
 local BLOCK_CAMERA_ACTION = "w_wPreviewBlockCamera"
 
@@ -233,6 +234,22 @@ local function refreshList()
 	ui.empty.Text = Logger.count == 0 and "No animations logged yet." or "No matches."
 end
 
+local function updateReaction()
+	if not ui.reaction then
+		return
+	end
+	local id = state.entry and state.entry.id
+	local r = id and Reactions.get(id)
+	for action, b in pairs(ui.actionButtons) do
+		b.BackgroundColor3 = (r and r.action == action) and THEME.accent or THEME.button
+	end
+	if not id then
+		ui.reaction.Text = "Pick an animation to set a reaction."
+	else
+		ui.reaction.Text = Reactions.describe(id) .. "  •  scrub to the hit frame, then Set hit here"
+	end
+end
+
 local function build()
 	gui = new("ScreenGui", {
 		Name = "w_wPreview",
@@ -244,8 +261,8 @@ local function build()
 	})
 
 	local main = new("Frame", {
-		Size = UDim2.fromOffset(320 + LIST_WIDTH, 400),
-		Position = UDim2.new(1, -(340 + LIST_WIDTH), 0.5, -200),
+		Size = UDim2.fromOffset(320 + LIST_WIDTH, 460),
+		Position = UDim2.new(1, -(340 + LIST_WIDTH), 0.5, -230),
 		BackgroundColor3 = THEME.bg,
 		BorderSizePixel = 0,
 		Parent = gui,
@@ -382,7 +399,7 @@ local function build()
 	})
 
 	ui.viewport = new("ViewportFrame", {
-		Size = UDim2.new(1, -16, 1, -150),
+		Size = UDim2.new(1, -16, 1, -200),
 		Position = UDim2.fromOffset(8, 40),
 		BackgroundColor3 = THEME.viewport,
 		Ambient = Color3.fromRGB(170, 170, 180),
@@ -447,7 +464,7 @@ local function build()
 
 	ui.timeline = new("TextButton", {
 		Size = UDim2.new(1, -16, 0, 10),
-		Position = UDim2.new(0, 8, 1, -103),
+		Position = UDim2.new(0, 8, 1, -153),
 		BackgroundColor3 = THEME.button,
 		Text = "",
 		AutoButtonColor = false,
@@ -508,7 +525,7 @@ local function build()
 
 	local row1 = new("Frame", {
 		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -86),
+		Position = UDim2.new(0, 8, 1, -136),
 		BackgroundTransparency = 1,
 		Parent = content,
 	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
@@ -566,7 +583,7 @@ local function build()
 
 	local row2 = new("Frame", {
 		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -54),
+		Position = UDim2.new(0, 8, 1, -104),
 		BackgroundTransparency = 1,
 		Parent = content,
 	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
@@ -580,6 +597,74 @@ local function build()
 
 	local camButton = button("Reset camera", 96, row2)
 	camButton.MouseButton1Click:Connect(resetCamera)
+
+	local row3 = new("Frame", {
+		Size = UDim2.new(1, -16, 0, 26),
+		Position = UDim2.new(0, 8, 1, -72),
+		BackgroundTransparency = 1,
+		Parent = content,
+	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
+
+	ui.actionButtons = {}
+	for _, action in ipairs(Reactions.ACTIONS) do
+		local b = button(action, 48, row3)
+		ui.actionButtons[action] = b
+		b.MouseButton1Click:Connect(function()
+			if not state.entry then
+				return
+			end
+			local r = Reactions.get(state.entry.id)
+			if r and r.action == action and not r.learned then
+				Reactions.setAction(state.entry.id, nil)
+			else
+				Reactions.setAction(state.entry.id, action)
+			end
+		end)
+	end
+
+	local hitButton = button("Set hit here", 78, row3)
+	hitButton.MouseButton1Click:Connect(function()
+		if state.entry and state.track then
+			Reactions.setHit(state.entry.id, state.track.TimePosition)
+		end
+	end)
+
+	local clearButton = button("Clear", 44, row3)
+	clearButton.MouseButton1Click:Connect(function()
+		if state.entry then
+			Reactions.clear(state.entry.id)
+		end
+	end)
+
+	ui.reaction = new("TextLabel", {
+		Size = UDim2.new(1, -16, 0, 14),
+		Position = UDim2.new(0, 8, 1, -42),
+		BackgroundTransparency = 1,
+		Text = "",
+		TextColor3 = THEME.sub,
+		Font = Enum.Font.Gotham,
+		TextSize = 11,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+		Parent = content,
+	})
+
+	ui.hitMarker = new("Frame", {
+		Size = UDim2.new(0, 2, 1, 6),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = UDim2.fromScale(0, 0.5),
+		BackgroundColor3 = Color3.fromRGB(250, 110, 110),
+		BorderSizePixel = 0,
+		Visible = false,
+		ZIndex = 3,
+		Parent = ui.timeline,
+	})
+
+	uiMaid:Connect(Reactions.Changed, function(id)
+		if state.entry and (id == nil or id == state.entry.id) then
+			updateReaction()
+		end
+	end)
 
 	ui.status = new("TextLabel", {
 		Size = UDim2.new(1, -16, 0, 20),
@@ -686,6 +771,13 @@ local function step()
 		* CFrame.new(0, 0, state.zoom)
 
 	local track = state.track
+	local r = state.entry and Reactions.get(state.entry.id)
+	if r and r.hit and track and track.Length > 0 then
+		ui.hitMarker.Visible = true
+		ui.hitMarker.Position = UDim2.fromScale(math.clamp(r.hit / track.Length, 0, 1), 0.5)
+	else
+		ui.hitMarker.Visible = false
+	end
 	if state.finished then
 		ui.progress.Size = UDim2.fromScale(1, 1)
 	elseif track and track.Length > 0 then
@@ -713,6 +805,7 @@ function PreviewWindow.open()
 		ui.title.Text = "Preview"
 		setStatus("Pick an animation from the list.")
 	end
+	updateReaction()
 end
 
 function PreviewWindow.show(entry)
@@ -724,6 +817,7 @@ function PreviewWindow.show(entry)
 	state.playing = true
 
 	rebuildRig()
+	updateReaction()
 end
 
 function PreviewWindow.close()

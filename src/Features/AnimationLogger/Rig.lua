@@ -1,4 +1,5 @@
 local Services = require("Util/Services")
+local Config = require("Config")
 
 local Players = Services.Players
 local LocalPlayer = Players.LocalPlayer
@@ -24,10 +25,10 @@ function Rig.findSource(kind, ownerName)
 			return player.Character
 		end
 
-		for _, inst in ipairs(workspace:GetDescendants()) do
-			if inst:IsA("Model") and inst.Name == ownerName and inst:FindFirstChildOfClass("Humanoid") then
-				return inst
-			end
+		local folder = workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+		local model = folder and folder:FindFirstChild(ownerName)
+		if model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
+			return model
 		end
 	end
 
