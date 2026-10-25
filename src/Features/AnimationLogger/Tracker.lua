@@ -9,6 +9,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Tracker = {
 	Played = Signal.new(),
+	damagedAt = {},
 }
 
 local characters = {}
@@ -67,8 +68,27 @@ local function unhookCharacter(model)
 	local charMaid = characters[model]
 	if charMaid then
 		characters[model] = nil
+		Tracker.damagedAt[model] = nil
 		charMaid:Clean()
 	end
+end
+
+local function hookHumanoid(model, charMaid, humanoid)
+	local last = humanoid.Health
+	charMaid:Connect(humanoid.HealthChanged, function(health)
+		if health < last - 0.01 then
+			local list = Tracker.damagedAt[model]
+			if not list then
+				list = {}
+				Tracker.damagedAt[model] = list
+			end
+			table.insert(list, os.clock())
+			if #list > 4 then
+				table.remove(list, 1)
+			end
+		end
+		last = health
+	end)
 end
 
 local function hookCharacter(model)
@@ -83,16 +103,17 @@ local function hookCharacter(model)
 		table.clear(animators)
 	end)
 
-	charMaid:Connect(model.DescendantAdded, function(inst)
+	local function check(inst)
 		if inst:IsA("Animator") then
 			hookAnimator(model, charMaid, animators, inst)
+		elseif inst:IsA("Humanoid") and inst.Parent == model then
+			hookHumanoid(model, charMaid, inst)
 		end
-	end)
+	end
 
+	charMaid:Connect(model.DescendantAdded, check)
 	for _, inst in ipairs(model:GetDescendants()) do
-		if inst:IsA("Animator") then
-			hookAnimator(model, charMaid, animators, inst)
-		end
+		check(inst)
 	end
 end
 

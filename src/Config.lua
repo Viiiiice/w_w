@@ -29,6 +29,9 @@ return {
 		LearnWindow = 1.5,
 		Cooldown = 0.08,
 		MaxSamples = 8,
+		HitboxModule = "ReplicatedStorage.Shared.Utils.HitboxUtils",
+		HitboxPadding = 2,
+		IgnoreIds = {},
 		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},
 }

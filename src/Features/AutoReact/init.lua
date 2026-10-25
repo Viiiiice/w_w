@@ -3,6 +3,8 @@ local LazyDropdown = require("Util/LazyDropdown")
 local PreviewWindow = require("Features/AnimationLogger/PreviewWindow")
 local Reactions = require("Features/AutoReact/Reactions")
 local Engine = require("Features/AutoReact/Engine")
+local Hitboxes = require("Features/AutoReact/Hitboxes")
+local HitboxView = require("Features/AutoReact/HitboxView")
 
 local AutoReact = {
 	Title = "Auto react",
@@ -37,6 +39,27 @@ function AutoReact.build(Tab, ctx)
 		Default = true,
 		Callback = function(value)
 			settings.useLearned = value
+		end,
+	})
+
+	Main:AddToggle("ReactFacing", {
+		Text = "Only when they face me",
+		Tooltip = "Skip attacks from players who are turned away from you",
+		Default = settings.facingOnly,
+		Callback = function(value)
+			settings.facingOnly = value
+		end,
+	})
+
+	Main:AddSlider("ReactFacingAngle", {
+		Text = "Facing angle",
+		Suffix = "°",
+		Default = settings.facingAngle,
+		Min = 20,
+		Max = 180,
+		Rounding = 0,
+		Callback = function(value)
+			settings.facingAngle = value
 		end,
 	})
 
@@ -208,6 +231,70 @@ function AutoReact.build(Tab, ctx)
 		end,
 	})
 
+	local Boxes = Tab:AddLeftGroupbox("Hitboxes")
+
+	local hitboxInfo = Boxes:AddLabel("0 moves recorded")
+	local hookMode = "Auto"
+
+	Boxes:AddToggle("ReactRecordHitboxes", {
+		Text = "Record my hitboxes",
+		Tooltip = "When you use a move, saves its hitbox size and hit time. Enemies using the same move then use that hitbox",
+		Default = false,
+		Callback = function(value)
+			if value and not Hitboxes.install(hookMode) then
+				notify("Hitboxes", "Couldn't hook the hitbox function in this game.")
+			end
+			Hitboxes.enabled = value
+		end,
+	})
+
+	Boxes:AddDropdown("ReactHitboxHook", {
+		Text = "Hook",
+		Tooltip = "Auto patches the game's hitbox module (set in Config). Namecall catches every workspace hitbox query",
+		Values = { "Auto", "Namecall" },
+		Default = "Auto",
+		Callback = function(value)
+			hookMode = value
+			if Hitboxes.mode() then
+				Hitboxes.uninstall()
+				Hitboxes.install(hookMode)
+			end
+		end,
+	})
+
+	Boxes:AddToggle("ReactUseHitboxes", {
+		Text = "Use hitboxes for range",
+		Tooltip = "Only react when you're inside the attacker's recorded hitbox. Moves without one use the studs range",
+		Default = settings.useHitboxes,
+		Callback = function(value)
+			settings.useHitboxes = value
+		end,
+	})
+
+	Boxes:AddToggle("ReactShowHitboxes", {
+		Text = "Show hitboxes",
+		Tooltip = "Draws recorded hitboxes in the world when someone uses a move: red if you're inside, yellow if not, green for your own while recording",
+		Default = false,
+		Callback = function(value)
+			HitboxView.enabled = value
+			if not value then
+				HitboxView.clear()
+			end
+		end,
+	})
+
+	Boxes:AddSlider("ReactHitboxPadding", {
+		Text = "Hitbox padding",
+		Suffix = " studs",
+		Default = settings.hitboxPadding,
+		Min = 0,
+		Max = 10,
+		Rounding = 1,
+		Callback = function(value)
+			settings.hitboxPadding = value
+		end,
+	})
+
 	local Saved = Tab:AddRightGroupbox("Saved reactions")
 
 	local summary = Saved:AddLabel("0 saved for this game")
@@ -215,7 +302,7 @@ function AutoReact.build(Tab, ctx)
 	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
-			if #r.markers > 0 then
+			if #r.markers > 0 or r.ignored then
 				table.insert(ids, id)
 			end
 		end
@@ -274,6 +361,14 @@ function AutoReact.build(Tab, ctx)
 	})
 
 	Saved:AddButton({
+		Text = "Ignore / unignore",
+		Tooltip = "Ignored animations are never reacted to or learned, like hit reactions",
+		Func = withSelected(function(id)
+			Reactions.setIgnored(id, not Reactions.isIgnored(id))
+		end),
+	})
+
+	Saved:AddButton({
 		Text = "Delete all",
 		Tooltip = "Double click to remove every saved reaction for this game",
 		DoubleClick = true,
@@ -289,9 +384,9 @@ function AutoReact.build(Tab, ctx)
 			list.markDirty()
 		end
 	end)
-	maid:Connect(Engine.Learned, function(id, r)
+	maid:Connect(Engine.Learned, function(id, r, source)
 		if state.notifyLearn and r then
-			notify("Learned", labelFor(id))
+			notify(source == "hitbox" and "Hitbox recorded" or "Learned", labelFor(id))
 		end
 	end)
 
@@ -302,6 +397,7 @@ function AutoReact.build(Tab, ctx)
 				state.summaryDirty = false
 				pcall(function()
 					summary:SetText(string.format("%d saved for this game", #savedIds()))
+					hitboxInfo:SetText(string.format("%d move(s) with a hitbox", Reactions.hitboxCount()))
 				end)
 			end
 			pcall(function()

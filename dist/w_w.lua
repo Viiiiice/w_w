@@ -50,6 +50,9 @@ return {
 		LearnWindow = 1.5,
 		Cooldown = 0.08,
 		MaxSamples = 8,
+		HitboxModule = "ReplicatedStorage.Shared.Utils.HitboxUtils",
+		HitboxPadding = 2,
+		IgnoreIds = {},
 		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},
 }
@@ -753,8 +756,14 @@ local function refreshMarkers()
 	end
 
 	local r = state.entry and Reactions.get(state.entry.id)
+	local ignored = r ~= nil and r.ignored == true
+	ui.ignoreLabel.Text = ignored and "Ignore: on" or "Ignore: off"
+	themed[ui.ignoreLabel] = { TextColor3 = ignored and "RiskColor" or "FontColor" }
+	ui.ignoreLabel.TextColor3 = color(ignored and "RiskColor" or "FontColor")
 	if not state.entry then
 		ui.markerInfo.Text = "Pick an animation first."
+	elseif ignored then
+		ui.markerInfo.Text = "Ignored: never reacted to."
 	elseif #markers == 0 then
 		ui.markerInfo.Text = "Scrub to a hit, then add one."
 	elseif r and r.learned then
@@ -1232,17 +1241,26 @@ local function build()
 		end
 	end)
 
-	ui.markerList = scrollList(markers, UDim2.fromOffset(0, 102), UDim2.new(1, 0, 1, -146))
+	ui.markerList = scrollList(markers, UDim2.fromOffset(0, 102), UDim2.new(1, 0, 1, -170))
 	ui.markerRows = {}
 
 	ui.markerInfo = label({
 		Size = UDim2.new(1, 0, 0, 16),
-		Position = UDim2.new(0, 0, 1, -40),
+		Position = UDim2.new(0, 0, 1, -64),
 		Text = "",
 		TextSize = 12,
 		ColorKey = "DisabledTextColor",
 		Parent = markers,
 	})
+
+	local ignore
+	ignore, ui.ignoreLabel = button(markers, "Ignore: off", UDim2.new(1, 0, 0, 20))
+	ignore.Position = UDim2.new(0, 0, 1, -45)
+	ignore.MouseButton1Click:Connect(function()
+		if state.entry then
+			Reactions.setIgnored(state.entry.id, not Reactions.isIgnored(state.entry.id))
+		end
+	end)
 
 	local clear, clearLabel = button(markers, "Clear markers", UDim2.new(1, 0, 0, 20))
 	clear.Position = UDim2.new(0, 0, 1, -20)
@@ -1338,6 +1356,39 @@ local function mouseOverWindow()
 	return mouse.X >= pos.X and mouse.X <= pos.X + size.X and mouse.Y >= pos.Y and mouse.Y <= pos.Y + size.Y
 end
 
+local function updateHitboxes(position)
+	ui.boxes = ui.boxes or {}
+	local r = state.entry and Reactions.get(state.entry.id)
+	local root = state.rig and state.rig.PrimaryPart
+	local hits = (root and r and r.hits) or {}
+	for i, h in ipairs(hits) do
+		local box = ui.boxes[i]
+		if not box then
+			box = new("Part", {
+				Anchored = true,
+				CanCollide = false,
+				CanQuery = false,
+				CanTouch = false,
+				CastShadow = false,
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(255, 60, 60),
+				Transparency = 0.75,
+				Parent = ui.world,
+			})
+			ui.boxes[i] = box
+		end
+		local active = math.abs(position - h.t) < 0.12
+		box.Transparency = active and 0.6 or 1
+		if active then
+			box.Size = Vector3.new(h.size[1], h.size[2], h.size[3])
+			box.CFrame = root.CFrame * CFrame.new(h.offset[1], h.offset[2], h.offset[3])
+		end
+	end
+	for i = #hits + 1, #ui.boxes do
+		ui.boxes[i].Transparency = 1
+	end
+end
+
 local function step()
 	setCameraBlocked(gui.Enabled and (state.orbiting or state.scrubbing or mouseOverWindow()))
 
@@ -1378,6 +1429,7 @@ local function step()
 	end
 	ui.progress.Size = UDim2.fromScale(length > 0 and position / length or 0, 1)
 	ui.time.Text = string.format("%.2fs / %.2fs", position, length)
+	updateHitboxes(position)
 end
 
 function PreviewWindow.setLibrary(lib)
@@ -1603,6 +1655,7 @@ local LocalPlayer = Players.LocalPlayer
 
 local Tracker = {
 	Played = Signal.new(),
+	damagedAt = {},
 }
 
 local characters = {}
@@ -1661,8 +1714,27 @@ local function unhookCharacter(model)
 	local charMaid = characters[model]
 	if charMaid then
 		characters[model] = nil
+		Tracker.damagedAt[model] = nil
 		charMaid:Clean()
 	end
+end
+
+local function hookHumanoid(model, charMaid, humanoid)
+	local last = humanoid.Health
+	charMaid:Connect(humanoid.HealthChanged, function(health)
+		if health < last - 0.01 then
+			local list = Tracker.damagedAt[model]
+			if not list then
+				list = {}
+				Tracker.damagedAt[model] = list
+			end
+			table.insert(list, os.clock())
+			if #list > 4 then
+				table.remove(list, 1)
+			end
+		end
+		last = health
+	end)
 end
 
 local function hookCharacter(model)
@@ -1677,16 +1749,17 @@ local function hookCharacter(model)
 		table.clear(animators)
 	end)
 
-	charMaid:Connect(model.DescendantAdded, function(inst)
+	local function check(inst)
 		if inst:IsA("Animator") then
 			hookAnimator(model, charMaid, animators, inst)
+		elseif inst:IsA("Humanoid") and inst.Parent == model then
+			hookHumanoid(model, charMaid, inst)
 		end
-	end)
+	end
 
+	charMaid:Connect(model.DescendantAdded, check)
 	for _, inst in ipairs(model:GetDescendants()) do
-		if inst:IsA("Animator") then
-			hookAnimator(model, charMaid, animators, inst)
-		end
+		check(inst)
 	end
 end
 
@@ -2119,6 +2192,8 @@ local Maid = require("Util/Maid")
 local Signal = require("Util/Signal")
 local Tracker = require("Features/AnimationLogger/Tracker")
 local Reactions = require("Features/AutoReact/Reactions")
+local Hitboxes = require("Features/AutoReact/Hitboxes")
+local HitboxView = require("Features/AutoReact/HitboxView")
 
 local Players = Services.Players
 local Stats = Services.Stats
@@ -2139,6 +2214,10 @@ local Engine = {
 		pingMode = "Auto",
 		pingManual = 0,
 		pingScale = 0.5,
+		facingOnly = true,
+		useHitboxes = true,
+		hitboxPadding = Config.AutoReact.HitboxPadding,
+		facingAngle = 70,
 		keys = table.clone(Config.AutoReact.Keys),
 	},
 	Fired = Signal.new(),
@@ -2282,6 +2361,50 @@ local function distanceTo(model)
 	return (mine.Position - theirs.Position).Magnitude
 end
 
+local function insideHitbox(model, hit)
+	local mine = rootOf(LocalPlayer.Character)
+	local theirs = rootOf(model)
+	if not mine or not theirs then
+		return false
+	end
+	local o, sz = hit.offset, hit.size
+	local center = theirs.CFrame * CFrame.new(o[1], o[2], o[3])
+	local p = center:PointToObjectSpace(mine.Position)
+	local pad = Engine.settings.hitboxPadding
+	return math.abs(p.X) <= sz[1] / 2 + pad and math.abs(p.Y) <= sz[2] / 2 + pad + 2 and math.abs(p.Z) <= sz[3] / 2 + pad
+end
+
+local HIT_BEFORE = 0.35
+local HIT_AFTER = 0.2
+
+local function wasHit(model, start)
+	for _, at in ipairs(Tracker.damagedAt[model] or {}) do
+		if at >= start - HIT_BEFORE and at <= start + HIT_AFTER then
+			return true
+		end
+	end
+	return false
+end
+
+local function facingMe(model)
+	local mine = rootOf(LocalPlayer.Character)
+	local theirs = rootOf(model)
+	if not mine or not theirs then
+		return false
+	end
+	local offset = mine.Position - theirs.Position
+	offset = Vector3.new(offset.X, 0, offset.Z)
+	if offset.Magnitude < 0.5 then
+		return true
+	end
+	local look = theirs.CFrame.LookVector
+	look = Vector3.new(look.X, 0, look.Z)
+	if look.Magnitude < 0.01 then
+		return true
+	end
+	return look.Unit:Dot(offset.Unit) >= math.cos(math.rad(Engine.settings.facingAngle))
+end
+
 local function trackSpeed(track)
 	local ok, speed = pcall(function()
 		return track.Speed
@@ -2303,15 +2426,21 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 	local s = Engine.settings
-	if not s.enabled and not s.learn then
+	if not s.enabled and not s.learn and not HitboxView.enabled then
 		return
 	end
-	if distanceTo(model) > s.range then
+	local id = Reactions.cleanId(rawId)
+	local known = id and Reactions.get(id)
+	local reach = s.useHitboxes and Reactions.reach(known, s.hitboxPadding) or 0
+	if distanceTo(model) > math.max(s.range, reach) then
 		return
 	end
 
-	local id = Reactions.cleanId(rawId)
-	if not id then
+	if not id or Reactions.isIgnored(id) then
+		return
+	end
+	local now = os.clock()
+	if wasHit(model, now) then
 		return
 	end
 
@@ -2320,11 +2449,28 @@ local function onPlayed(maid, model, track, rawId)
 		table.insert(pending, { id = id, model = model, track = track, start = os.clock() })
 	end
 
+	local r = Reactions.get(id)
+	if HitboxView.enabled and r and r.hits then
+		local viewSpeed = trackSpeed(track)
+		for _, h in ipairs(r.hits) do
+			local thread
+			thread = task.delay(math.max(0, h.t / viewSpeed - 0.12), function()
+				maid:Remove(thread, true)
+				if track.IsPlaying then
+					HitboxView.show(model, h, 0.3, s.hitboxPadding)
+				end
+			end)
+			maid:Give(thread)
+		end
+	end
+
 	if not s.enabled then
 		return
 	end
-	local r = Reactions.get(id)
 	if not r or #r.markers == 0 or (r.learned and not s.useLearned) then
+		return
+	end
+	if s.facingOnly and not facingMe(model) then
 		return
 	end
 
@@ -2337,13 +2483,18 @@ local function onPlayed(maid, model, track, rawId)
 		local thread
 		thread = task.delay(wait, function()
 			maid:Remove(thread, true)
-			if not Engine.settings.enabled then
+			if not Engine.settings.enabled or wasHit(model, now) then
 				return
 			end
 			if not track.IsPlaying and wait > 0.05 then
 				return
 			end
-			if distanceTo(model) > Engine.settings.range then
+			local hit = Engine.settings.useHitboxes and Reactions.hitNear(r, marker.t)
+			if hit then
+				if not insideHitbox(model, hit) then
+					return
+				end
+			elseif distanceTo(model) > Engine.settings.range then
 				return
 			end
 			Engine.send(action, hold)
@@ -2355,11 +2506,19 @@ end
 local function onDamaged()
 	local now = os.clock()
 	prune(now)
-	local best
+	local best, bestDistance
 	for _, p in ipairs(pending) do
-		if now - p.start > 0.05 and (not best or p.start > best.start) then
-			if distanceTo(p.model) <= Engine.settings.range + 6 then
-				best = p
+		if now - p.start > 0.05 and not wasHit(p.model, p.start) and not Reactions.isIgnored(p.id) then
+			local distance = distanceTo(p.model)
+			if
+				distance <= Engine.settings.range + 6
+				and (
+					not best
+					or distance < bestDistance - 2
+					or (math.abs(distance - bestDistance) <= 2 and p.start > best.start)
+				)
+			then
+				best, bestDistance = p, distance
 			end
 		end
 	end
@@ -2404,6 +2563,18 @@ end
 function Engine.start(maid)
 	Reactions.load()
 
+	Hitboxes.start(maid)
+	maid:Connect(Hitboxes.Recorded, function(id, t, size, offset)
+		HitboxView.show(LocalPlayer.Character, {
+			size = { size.X, size.Y, size.Z },
+			offset = { offset.X, offset.Y, offset.Z },
+		}, 0.35, 0, true)
+		local r, isNew = Reactions.addHit(id, t, size, offset, Engine.settings.learnAction)
+		if isNew then
+			Engine.Learned:Fire(id, r, "hitbox")
+		end
+	end)
+
 	local threads = maid:Extend()
 	maid:Connect(Tracker.Played, function(model, track, rawId)
 		onPlayed(threads, model, track, rawId)
@@ -2428,6 +2599,7 @@ function Engine.start(maid)
 
 	maid:Give(function()
 		running = false
+		HitboxView.clear()
 		table.clear(pending)
 		for code in pairs(held) do
 			pcall(release, code)
@@ -2437,6 +2609,297 @@ function Engine.start(maid)
 end
 
 return Engine
+end
+
+__modules["Features/AutoReact/HitboxView"] = function()
+local Services = require("Util/Services")
+
+local RunService = Services.RunService
+local LocalPlayer = Services.Players.LocalPlayer
+
+local HitboxView = {
+	enabled = false,
+}
+
+local COLORS = {
+	inside = Color3.fromRGB(255, 60, 60),
+	outside = Color3.fromRGB(255, 200, 60),
+	mine = Color3.fromRGB(80, 220, 120),
+}
+
+local folder
+local pool = {}
+local active = {}
+local connection
+
+local function rootOf(model)
+	return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
+end
+
+local function getBox()
+	local box = table.remove(pool)
+	if box and box.Parent then
+		return box
+	end
+	if not folder or not folder.Parent then
+		folder = Instance.new("Folder")
+		folder.Name = "w_wHitboxes"
+		folder.Parent = workspace.CurrentCamera
+	end
+	box = Instance.new("Part")
+	box.Anchored = true
+	box.CanCollide = false
+	box.CanQuery = false
+	box.CanTouch = false
+	box.CastShadow = false
+	box.Material = Enum.Material.ForceField
+	box.Transparency = 0.2
+	box.Parent = folder
+	return box
+end
+
+local function release(entry)
+	entry.box.CFrame = CFrame.new(0, -10000, 0)
+	table.insert(pool, entry.box)
+end
+
+local function inside(cf, size, position, padding)
+	local p = cf:PointToObjectSpace(position)
+	return math.abs(p.X) <= size.X / 2 + padding
+		and math.abs(p.Y) <= size.Y / 2 + padding + 2
+		and math.abs(p.Z) <= size.Z / 2 + padding
+end
+
+local function step()
+	local now = os.clock()
+	local mine = rootOf(LocalPlayer.Character)
+	for i = #active, 1, -1 do
+		local entry = active[i]
+		local root = rootOf(entry.model)
+		if now >= entry.expires or not root then
+			table.remove(active, i)
+			release(entry)
+		else
+			local cf = root.CFrame * CFrame.new(entry.offset)
+			entry.box.CFrame = cf
+			if entry.color then
+				entry.box.Color = entry.color
+			else
+				local hit = mine and inside(cf, entry.size, mine.Position, entry.padding)
+				entry.box.Color = hit and COLORS.inside or COLORS.outside
+			end
+		end
+	end
+	if #active == 0 and connection then
+		connection:Disconnect()
+		connection = nil
+	end
+end
+
+function HitboxView.show(model, hit, duration, padding, mine)
+	if not HitboxView.enabled then
+		return
+	end
+	local box = getBox()
+	local size = Vector3.new(hit.size[1], hit.size[2], hit.size[3])
+	box.Size = size
+	table.insert(active, {
+		model = model,
+		box = box,
+		size = size,
+		offset = Vector3.new(hit.offset[1], hit.offset[2], hit.offset[3]),
+		expires = os.clock() + duration,
+		padding = padding or 0,
+		color = mine and COLORS.mine or nil,
+	})
+	if not connection then
+		connection = RunService.Heartbeat:Connect(step)
+	end
+	step()
+end
+
+function HitboxView.clear()
+	for i = #active, 1, -1 do
+		release(table.remove(active, i))
+	end
+	if connection then
+		connection:Disconnect()
+		connection = nil
+	end
+	if folder then
+		folder:Destroy()
+		folder = nil
+	end
+	table.clear(pool)
+end
+
+return HitboxView
+end
+
+__modules["Features/AutoReact/Hitboxes"] = function()
+local Services = require("Util/Services")
+local Config = require("Config")
+local Signal = require("Util/Signal")
+local Tracker = require("Features/AnimationLogger/Tracker")
+
+local LocalPlayer = Services.Players.LocalPlayer
+
+local Hitboxes = {
+	enabled = false,
+	Recorded = Signal.new(),
+}
+
+local METHODS = { GetPartsInPart = true, GetPartBoundsInBox = true, GetPartBoundsInRadius = true }
+
+local installed = false
+local original
+local patched = {}
+local lastMove
+
+local function record(method, a, b)
+	local move = lastMove
+	if not move or not move.track.IsPlaying then
+		return
+	end
+	local t = move.track.TimePosition
+	if move.lastT and math.abs(t - move.lastT) < 0.15 then
+		return
+	end
+	move.lastT = t
+	local character = LocalPlayer.Character
+	local root = character and character.HumanoidRootPart
+	if not root then
+		return
+	end
+
+	local cf, size
+	if method == "GetPartsInPart" then
+		if typeof(a) ~= "Instance" then
+			return
+		end
+		cf, size = a.CFrame, a.Size
+	elseif method == "GetPartBoundsInBox" then
+		if typeof(a) ~= "CFrame" or typeof(b) ~= "Vector3" then
+			return
+		end
+		cf, size = a, b
+	else
+		if typeof(a) ~= "Vector3" or type(b) ~= "number" then
+			return
+		end
+		cf, size = a, b
+	end
+
+	task.defer(function(rootCFrame, id, t)
+		local position = typeof(cf) == "CFrame" and cf.Position or cf
+		local boxSize = typeof(size) == "Vector3" and size or Vector3.one * size * 2
+		Hitboxes.Recorded:Fire(id, t, boxSize, rootCFrame:PointToObjectSpace(position))
+	end, root.CFrame, move.id, t)
+end
+
+local function findModule()
+	local current = game
+	for name in string.gmatch(Config.AutoReact.HitboxModule or "", "[^%.]+") do
+		local ok, child = pcall(function()
+			return current == game and game:GetService(name) or current:FindFirstChild(name)
+		end)
+		if not ok or not child then
+			return nil
+		end
+		current = child
+	end
+	return current ~= game and current:IsA("ModuleScript") and current or nil
+end
+
+local function patchModule()
+	local module = findModule()
+	if not module then
+		return false
+	end
+	local ok, lib = pcall(require, module)
+	if not ok or type(lib) ~= "table" then
+		return false
+	end
+	for name in pairs(METHODS) do
+		local fn = rawget(lib, name)
+		if type(fn) == "function" then
+			patched[name] = { lib = lib, fn = fn }
+			lib[name] = function(...)
+				if Hitboxes.enabled then
+					local args = table.pack(...)
+					local first = typeof(args[1]) == "table" and 2 or 1
+					pcall(record, name, args[first], args[first + 1])
+				end
+				return fn(...)
+			end
+		end
+	end
+	return next(patched) ~= nil
+end
+
+function Hitboxes.install(mode)
+	if installed then
+		return true
+	end
+	if mode ~= "Namecall" and patchModule() then
+		installed = "module"
+		return true
+	end
+	if not (hookmetamethod and getnamecallmethod and checkcaller) then
+		return false
+	end
+	local wrap = newcclosure or function(f)
+		return f
+	end
+	original = hookmetamethod(
+		game,
+		"__namecall",
+		wrap(function(self, ...)
+			if Hitboxes.enabled and self == workspace and not checkcaller() then
+				local method = getnamecallmethod()
+				if METHODS[method] then
+					pcall(record, method, ...)
+				end
+			end
+			return original(self, ...)
+		end)
+	)
+	installed = "namecall"
+	return true
+end
+
+function Hitboxes.mode()
+	return installed
+end
+
+function Hitboxes.uninstall()
+	if installed == "namecall" and original then
+		pcall(hookmetamethod, game, "__namecall", original)
+	end
+	for name, p in pairs(patched) do
+		p.lib[name] = p.fn
+	end
+	table.clear(patched)
+	installed = false
+end
+
+function Hitboxes.start(maid)
+	maid:Connect(Tracker.Played, function(model, track, rawId)
+		if model == LocalPlayer.Character and not track.Looped then
+			local id = tostring(rawId):match("%d+")
+			if id then
+				lastMove = { id = id, track = track }
+			end
+		end
+	end)
+	maid:Give(function()
+		Hitboxes.enabled = false
+		Hitboxes.uninstall()
+		lastMove = nil
+	end)
+end
+
+return Hitboxes
 end
 
 __modules["Features/AutoReact/Reactions"] = function()
@@ -2554,6 +3017,37 @@ function Reactions.has(id)
 	return #Reactions.markers(id) > 0
 end
 
+local hardIgnored = {}
+for _, id in ipairs(Config.AutoReact.IgnoreIds or {}) do
+	local clean = cleanId(id)
+	if clean then
+		hardIgnored[clean] = true
+	end
+end
+
+function Reactions.isIgnored(id)
+	id = cleanId(id)
+	if not id then
+		return false
+	end
+	if hardIgnored[id] then
+		return true
+	end
+	local r = Reactions.data[id]
+	return r ~= nil and r.ignored == true
+end
+
+function Reactions.setIgnored(id, ignored)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	local r = Reactions.data[id] or { samples = {}, markers = {} }
+	Reactions.data[id] = r
+	r.ignored = ignored or nil
+	changed(id)
+end
+
 local function ensure(id)
 	local r = Reactions.data[id]
 	if not r then
@@ -2611,6 +3105,9 @@ function Reactions.addSample(id, hit, defaultAction)
 	if not id then
 		return
 	end
+	if Reactions.isIgnored(id) then
+		return nil
+	end
 	local r = ensure(id)
 	local samples = r.samples
 	table.insert(samples, hit)
@@ -2627,6 +3124,89 @@ function Reactions.addSample(id, hit, defaultAction)
 	end
 	changed(id)
 	return r
+end
+
+local function vec(v)
+	return { math.floor(v.X * 100 + 0.5) / 100, math.floor(v.Y * 100 + 0.5) / 100, math.floor(v.Z * 100 + 0.5) / 100 }
+end
+
+function Reactions.addHit(id, t, size, offset, defaultAction)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	if Reactions.isIgnored(id) then
+		return nil, false
+	end
+	local r = ensure(id)
+	r.hits = r.hits or {}
+
+	local merged
+	for _, h in ipairs(r.hits) do
+		if math.abs(h.t - t) < 0.08 then
+			h.t = (h.t * h.n + t) / (h.n + 1)
+			h.n += 1
+			h.size = vec(Vector3.new(
+				math.max(h.size[1], size.X),
+				math.max(h.size[2], size.Y),
+				math.max(h.size[3], size.Z)
+			))
+			h.offset = vec(offset)
+			merged = h
+			break
+		end
+	end
+	if not merged then
+		table.insert(r.hits, { t = t, n = 1, size = vec(size), offset = vec(offset) })
+		table.sort(r.hits, function(a, b)
+			return a.t < b.t
+		end)
+		while #r.hits > 8 do
+			table.remove(r.hits)
+		end
+	end
+
+	if r.learned or #r.markers == 0 then
+		local action = r.markers[1] and r.markers[1].action or defaultAction
+		r.markers = {}
+		for _, h in ipairs(r.hits) do
+			table.insert(r.markers, { t = h.t, action = action })
+		end
+		r.learned = true
+	end
+	changed(id)
+	return r, merged == nil
+end
+
+function Reactions.hitNear(r, t)
+	local best, bestGap
+	for _, h in ipairs(r and r.hits or {}) do
+		local gap = math.abs(h.t - t)
+		if gap < 0.25 and (not best or gap < bestGap) then
+			best, bestGap = h, gap
+		end
+	end
+	return best
+end
+
+function Reactions.reach(r, padding)
+	local reach = 0
+	for _, h in ipairs(r and r.hits or {}) do
+		local o, sz = h.offset, h.size
+		local d = math.sqrt(o[1] ^ 2 + o[2] ^ 2 + o[3] ^ 2) + math.max(sz[1], sz[2], sz[3]) / 2 + (padding or 0)
+		reach = math.max(reach, d)
+	end
+	return reach
+end
+
+function Reactions.hitboxCount()
+	local n = 0
+	for _, r in pairs(Reactions.data) do
+		if r.hits and #r.hits > 0 then
+			n += 1
+		end
+	end
+	return n
 end
 
 function Reactions.clear(id)
@@ -2651,6 +3231,9 @@ end
 
 function Reactions.describe(id)
 	local r = Reactions.get(id)
+	if r and r.ignored then
+		return "Ignored"
+	end
 	if not r or #r.markers == 0 then
 		return "No reaction set"
 	end
@@ -2663,8 +3246,11 @@ function Reactions.describe(id)
 		table.insert(parts, Reactions.describeMarker(m))
 	end
 	local text = table.concat(parts, ", ")
+	if r.hits and #r.hits > 0 then
+		text ..= " [hitbox]"
+	end
 	if r.learned then
-		text ..= string.format(" (learned, %d sample(s))", #r.samples)
+		text ..= " (learned)"
 	end
 	return text
 end
@@ -2678,6 +3264,8 @@ local LazyDropdown = require("Util/LazyDropdown")
 local PreviewWindow = require("Features/AnimationLogger/PreviewWindow")
 local Reactions = require("Features/AutoReact/Reactions")
 local Engine = require("Features/AutoReact/Engine")
+local Hitboxes = require("Features/AutoReact/Hitboxes")
+local HitboxView = require("Features/AutoReact/HitboxView")
 
 local AutoReact = {
 	Title = "Auto react",
@@ -2712,6 +3300,27 @@ function AutoReact.build(Tab, ctx)
 		Default = true,
 		Callback = function(value)
 			settings.useLearned = value
+		end,
+	})
+
+	Main:AddToggle("ReactFacing", {
+		Text = "Only when they face me",
+		Tooltip = "Skip attacks from players who are turned away from you",
+		Default = settings.facingOnly,
+		Callback = function(value)
+			settings.facingOnly = value
+		end,
+	})
+
+	Main:AddSlider("ReactFacingAngle", {
+		Text = "Facing angle",
+		Suffix = "°",
+		Default = settings.facingAngle,
+		Min = 20,
+		Max = 180,
+		Rounding = 0,
+		Callback = function(value)
+			settings.facingAngle = value
 		end,
 	})
 
@@ -2883,6 +3492,70 @@ function AutoReact.build(Tab, ctx)
 		end,
 	})
 
+	local Boxes = Tab:AddLeftGroupbox("Hitboxes")
+
+	local hitboxInfo = Boxes:AddLabel("0 moves recorded")
+	local hookMode = "Auto"
+
+	Boxes:AddToggle("ReactRecordHitboxes", {
+		Text = "Record my hitboxes",
+		Tooltip = "When you use a move, saves its hitbox size and hit time. Enemies using the same move then use that hitbox",
+		Default = false,
+		Callback = function(value)
+			if value and not Hitboxes.install(hookMode) then
+				notify("Hitboxes", "Couldn't hook the hitbox function in this game.")
+			end
+			Hitboxes.enabled = value
+		end,
+	})
+
+	Boxes:AddDropdown("ReactHitboxHook", {
+		Text = "Hook",
+		Tooltip = "Auto patches the game's hitbox module (set in Config). Namecall catches every workspace hitbox query",
+		Values = { "Auto", "Namecall" },
+		Default = "Auto",
+		Callback = function(value)
+			hookMode = value
+			if Hitboxes.mode() then
+				Hitboxes.uninstall()
+				Hitboxes.install(hookMode)
+			end
+		end,
+	})
+
+	Boxes:AddToggle("ReactUseHitboxes", {
+		Text = "Use hitboxes for range",
+		Tooltip = "Only react when you're inside the attacker's recorded hitbox. Moves without one use the studs range",
+		Default = settings.useHitboxes,
+		Callback = function(value)
+			settings.useHitboxes = value
+		end,
+	})
+
+	Boxes:AddToggle("ReactShowHitboxes", {
+		Text = "Show hitboxes",
+		Tooltip = "Draws recorded hitboxes in the world when someone uses a move: red if you're inside, yellow if not, green for your own while recording",
+		Default = false,
+		Callback = function(value)
+			HitboxView.enabled = value
+			if not value then
+				HitboxView.clear()
+			end
+		end,
+	})
+
+	Boxes:AddSlider("ReactHitboxPadding", {
+		Text = "Hitbox padding",
+		Suffix = " studs",
+		Default = settings.hitboxPadding,
+		Min = 0,
+		Max = 10,
+		Rounding = 1,
+		Callback = function(value)
+			settings.hitboxPadding = value
+		end,
+	})
+
 	local Saved = Tab:AddRightGroupbox("Saved reactions")
 
 	local summary = Saved:AddLabel("0 saved for this game")
@@ -2890,7 +3563,7 @@ function AutoReact.build(Tab, ctx)
 	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
-			if #r.markers > 0 then
+			if #r.markers > 0 or r.ignored then
 				table.insert(ids, id)
 			end
 		end
@@ -2949,6 +3622,14 @@ function AutoReact.build(Tab, ctx)
 	})
 
 	Saved:AddButton({
+		Text = "Ignore / unignore",
+		Tooltip = "Ignored animations are never reacted to or learned, like hit reactions",
+		Func = withSelected(function(id)
+			Reactions.setIgnored(id, not Reactions.isIgnored(id))
+		end),
+	})
+
+	Saved:AddButton({
 		Text = "Delete all",
 		Tooltip = "Double click to remove every saved reaction for this game",
 		DoubleClick = true,
@@ -2964,9 +3645,9 @@ function AutoReact.build(Tab, ctx)
 			list.markDirty()
 		end
 	end)
-	maid:Connect(Engine.Learned, function(id, r)
+	maid:Connect(Engine.Learned, function(id, r, source)
 		if state.notifyLearn and r then
-			notify("Learned", labelFor(id))
+			notify(source == "hitbox" and "Hitbox recorded" or "Learned", labelFor(id))
 		end
 	end)
 
@@ -2977,6 +3658,7 @@ function AutoReact.build(Tab, ctx)
 				state.summaryDirty = false
 				pcall(function()
 					summary:SetText(string.format("%d saved for this game", #savedIds()))
+					hitboxInfo:SetText(string.format("%d move(s) with a hitbox", Reactions.hitboxCount()))
 				end)
 			end
 			pcall(function()

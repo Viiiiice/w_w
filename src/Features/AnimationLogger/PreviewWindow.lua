@@ -501,8 +501,14 @@ local function refreshMarkers()
 	end
 
 	local r = state.entry and Reactions.get(state.entry.id)
+	local ignored = r ~= nil and r.ignored == true
+	ui.ignoreLabel.Text = ignored and "Ignore: on" or "Ignore: off"
+	themed[ui.ignoreLabel] = { TextColor3 = ignored and "RiskColor" or "FontColor" }
+	ui.ignoreLabel.TextColor3 = color(ignored and "RiskColor" or "FontColor")
 	if not state.entry then
 		ui.markerInfo.Text = "Pick an animation first."
+	elseif ignored then
+		ui.markerInfo.Text = "Ignored: never reacted to."
 	elseif #markers == 0 then
 		ui.markerInfo.Text = "Scrub to a hit, then add one."
 	elseif r and r.learned then
@@ -980,17 +986,26 @@ local function build()
 		end
 	end)
 
-	ui.markerList = scrollList(markers, UDim2.fromOffset(0, 102), UDim2.new(1, 0, 1, -146))
+	ui.markerList = scrollList(markers, UDim2.fromOffset(0, 102), UDim2.new(1, 0, 1, -170))
 	ui.markerRows = {}
 
 	ui.markerInfo = label({
 		Size = UDim2.new(1, 0, 0, 16),
-		Position = UDim2.new(0, 0, 1, -40),
+		Position = UDim2.new(0, 0, 1, -64),
 		Text = "",
 		TextSize = 12,
 		ColorKey = "DisabledTextColor",
 		Parent = markers,
 	})
+
+	local ignore
+	ignore, ui.ignoreLabel = button(markers, "Ignore: off", UDim2.new(1, 0, 0, 20))
+	ignore.Position = UDim2.new(0, 0, 1, -45)
+	ignore.MouseButton1Click:Connect(function()
+		if state.entry then
+			Reactions.setIgnored(state.entry.id, not Reactions.isIgnored(state.entry.id))
+		end
+	end)
 
 	local clear, clearLabel = button(markers, "Clear markers", UDim2.new(1, 0, 0, 20))
 	clear.Position = UDim2.new(0, 0, 1, -20)
@@ -1086,6 +1101,39 @@ local function mouseOverWindow()
 	return mouse.X >= pos.X and mouse.X <= pos.X + size.X and mouse.Y >= pos.Y and mouse.Y <= pos.Y + size.Y
 end
 
+local function updateHitboxes(position)
+	ui.boxes = ui.boxes or {}
+	local r = state.entry and Reactions.get(state.entry.id)
+	local root = state.rig and state.rig.PrimaryPart
+	local hits = (root and r and r.hits) or {}
+	for i, h in ipairs(hits) do
+		local box = ui.boxes[i]
+		if not box then
+			box = new("Part", {
+				Anchored = true,
+				CanCollide = false,
+				CanQuery = false,
+				CanTouch = false,
+				CastShadow = false,
+				Material = Enum.Material.Neon,
+				Color = Color3.fromRGB(255, 60, 60),
+				Transparency = 0.75,
+				Parent = ui.world,
+			})
+			ui.boxes[i] = box
+		end
+		local active = math.abs(position - h.t) < 0.12
+		box.Transparency = active and 0.6 or 1
+		if active then
+			box.Size = Vector3.new(h.size[1], h.size[2], h.size[3])
+			box.CFrame = root.CFrame * CFrame.new(h.offset[1], h.offset[2], h.offset[3])
+		end
+	end
+	for i = #hits + 1, #ui.boxes do
+		ui.boxes[i].Transparency = 1
+	end
+end
+
 local function step()
 	setCameraBlocked(gui.Enabled and (state.orbiting or state.scrubbing or mouseOverWindow()))
 
@@ -1126,6 +1174,7 @@ local function step()
 	end
 	ui.progress.Size = UDim2.fromScale(length > 0 and position / length or 0, 1)
 	ui.time.Text = string.format("%.2fs / %.2fs", position, length)
+	updateHitboxes(position)
 end
 
 function PreviewWindow.setLibrary(lib)

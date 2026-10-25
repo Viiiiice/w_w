@@ -112,6 +112,37 @@ function Reactions.has(id)
 	return #Reactions.markers(id) > 0
 end
 
+local hardIgnored = {}
+for _, id in ipairs(Config.AutoReact.IgnoreIds or {}) do
+	local clean = cleanId(id)
+	if clean then
+		hardIgnored[clean] = true
+	end
+end
+
+function Reactions.isIgnored(id)
+	id = cleanId(id)
+	if not id then
+		return false
+	end
+	if hardIgnored[id] then
+		return true
+	end
+	local r = Reactions.data[id]
+	return r ~= nil and r.ignored == true
+end
+
+function Reactions.setIgnored(id, ignored)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	local r = Reactions.data[id] or { samples = {}, markers = {} }
+	Reactions.data[id] = r
+	r.ignored = ignored or nil
+	changed(id)
+end
+
 local function ensure(id)
 	local r = Reactions.data[id]
 	if not r then
@@ -169,6 +200,9 @@ function Reactions.addSample(id, hit, defaultAction)
 	if not id then
 		return
 	end
+	if Reactions.isIgnored(id) then
+		return nil
+	end
 	local r = ensure(id)
 	local samples = r.samples
 	table.insert(samples, hit)
@@ -185,6 +219,89 @@ function Reactions.addSample(id, hit, defaultAction)
 	end
 	changed(id)
 	return r
+end
+
+local function vec(v)
+	return { math.floor(v.X * 100 + 0.5) / 100, math.floor(v.Y * 100 + 0.5) / 100, math.floor(v.Z * 100 + 0.5) / 100 }
+end
+
+function Reactions.addHit(id, t, size, offset, defaultAction)
+	id = cleanId(id)
+	if not id then
+		return
+	end
+	if Reactions.isIgnored(id) then
+		return nil, false
+	end
+	local r = ensure(id)
+	r.hits = r.hits or {}
+
+	local merged
+	for _, h in ipairs(r.hits) do
+		if math.abs(h.t - t) < 0.08 then
+			h.t = (h.t * h.n + t) / (h.n + 1)
+			h.n += 1
+			h.size = vec(Vector3.new(
+				math.max(h.size[1], size.X),
+				math.max(h.size[2], size.Y),
+				math.max(h.size[3], size.Z)
+			))
+			h.offset = vec(offset)
+			merged = h
+			break
+		end
+	end
+	if not merged then
+		table.insert(r.hits, { t = t, n = 1, size = vec(size), offset = vec(offset) })
+		table.sort(r.hits, function(a, b)
+			return a.t < b.t
+		end)
+		while #r.hits > 8 do
+			table.remove(r.hits)
+		end
+	end
+
+	if r.learned or #r.markers == 0 then
+		local action = r.markers[1] and r.markers[1].action or defaultAction
+		r.markers = {}
+		for _, h in ipairs(r.hits) do
+			table.insert(r.markers, { t = h.t, action = action })
+		end
+		r.learned = true
+	end
+	changed(id)
+	return r, merged == nil
+end
+
+function Reactions.hitNear(r, t)
+	local best, bestGap
+	for _, h in ipairs(r and r.hits or {}) do
+		local gap = math.abs(h.t - t)
+		if gap < 0.25 and (not best or gap < bestGap) then
+			best, bestGap = h, gap
+		end
+	end
+	return best
+end
+
+function Reactions.reach(r, padding)
+	local reach = 0
+	for _, h in ipairs(r and r.hits or {}) do
+		local o, sz = h.offset, h.size
+		local d = math.sqrt(o[1] ^ 2 + o[2] ^ 2 + o[3] ^ 2) + math.max(sz[1], sz[2], sz[3]) / 2 + (padding or 0)
+		reach = math.max(reach, d)
+	end
+	return reach
+end
+
+function Reactions.hitboxCount()
+	local n = 0
+	for _, r in pairs(Reactions.data) do
+		if r.hits and #r.hits > 0 then
+			n += 1
+		end
+	end
+	return n
 end
 
 function Reactions.clear(id)
@@ -209,6 +326,9 @@ end
 
 function Reactions.describe(id)
 	local r = Reactions.get(id)
+	if r and r.ignored then
+		return "Ignored"
+	end
 	if not r or #r.markers == 0 then
 		return "No reaction set"
 	end
@@ -221,8 +341,11 @@ function Reactions.describe(id)
 		table.insert(parts, Reactions.describeMarker(m))
 	end
 	local text = table.concat(parts, ", ")
+	if r.hits and #r.hits > 0 then
+		text ..= " [hitbox]"
+	end
 	if r.learned then
-		text ..= string.format(" (learned, %d sample(s))", #r.samples)
+		text ..= " (learned)"
 	end
 	return text
 end

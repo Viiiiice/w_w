@@ -4,6 +4,8 @@ local Maid = require("Util/Maid")
 local Signal = require("Util/Signal")
 local Tracker = require("Features/AnimationLogger/Tracker")
 local Reactions = require("Features/AutoReact/Reactions")
+local Hitboxes = require("Features/AutoReact/Hitboxes")
+local HitboxView = require("Features/AutoReact/HitboxView")
 
 local Players = Services.Players
 local Stats = Services.Stats
@@ -24,6 +26,10 @@ local Engine = {
 		pingMode = "Auto",
 		pingManual = 0,
 		pingScale = 0.5,
+		facingOnly = true,
+		useHitboxes = true,
+		hitboxPadding = Config.AutoReact.HitboxPadding,
+		facingAngle = 70,
 		keys = table.clone(Config.AutoReact.Keys),
 	},
 	Fired = Signal.new(),
@@ -167,6 +173,50 @@ local function distanceTo(model)
 	return (mine.Position - theirs.Position).Magnitude
 end
 
+local function insideHitbox(model, hit)
+	local mine = rootOf(LocalPlayer.Character)
+	local theirs = rootOf(model)
+	if not mine or not theirs then
+		return false
+	end
+	local o, sz = hit.offset, hit.size
+	local center = theirs.CFrame * CFrame.new(o[1], o[2], o[3])
+	local p = center:PointToObjectSpace(mine.Position)
+	local pad = Engine.settings.hitboxPadding
+	return math.abs(p.X) <= sz[1] / 2 + pad and math.abs(p.Y) <= sz[2] / 2 + pad + 2 and math.abs(p.Z) <= sz[3] / 2 + pad
+end
+
+local HIT_BEFORE = 0.35
+local HIT_AFTER = 0.2
+
+local function wasHit(model, start)
+	for _, at in ipairs(Tracker.damagedAt[model] or {}) do
+		if at >= start - HIT_BEFORE and at <= start + HIT_AFTER then
+			return true
+		end
+	end
+	return false
+end
+
+local function facingMe(model)
+	local mine = rootOf(LocalPlayer.Character)
+	local theirs = rootOf(model)
+	if not mine or not theirs then
+		return false
+	end
+	local offset = mine.Position - theirs.Position
+	offset = Vector3.new(offset.X, 0, offset.Z)
+	if offset.Magnitude < 0.5 then
+		return true
+	end
+	local look = theirs.CFrame.LookVector
+	look = Vector3.new(look.X, 0, look.Z)
+	if look.Magnitude < 0.01 then
+		return true
+	end
+	return look.Unit:Dot(offset.Unit) >= math.cos(math.rad(Engine.settings.facingAngle))
+end
+
 local function trackSpeed(track)
 	local ok, speed = pcall(function()
 		return track.Speed
@@ -188,15 +238,21 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 	local s = Engine.settings
-	if not s.enabled and not s.learn then
+	if not s.enabled and not s.learn and not HitboxView.enabled then
 		return
 	end
-	if distanceTo(model) > s.range then
+	local id = Reactions.cleanId(rawId)
+	local known = id and Reactions.get(id)
+	local reach = s.useHitboxes and Reactions.reach(known, s.hitboxPadding) or 0
+	if distanceTo(model) > math.max(s.range, reach) then
 		return
 	end
 
-	local id = Reactions.cleanId(rawId)
-	if not id then
+	if not id or Reactions.isIgnored(id) then
+		return
+	end
+	local now = os.clock()
+	if wasHit(model, now) then
 		return
 	end
 
@@ -205,11 +261,28 @@ local function onPlayed(maid, model, track, rawId)
 		table.insert(pending, { id = id, model = model, track = track, start = os.clock() })
 	end
 
+	local r = Reactions.get(id)
+	if HitboxView.enabled and r and r.hits then
+		local viewSpeed = trackSpeed(track)
+		for _, h in ipairs(r.hits) do
+			local thread
+			thread = task.delay(math.max(0, h.t / viewSpeed - 0.12), function()
+				maid:Remove(thread, true)
+				if track.IsPlaying then
+					HitboxView.show(model, h, 0.3, s.hitboxPadding)
+				end
+			end)
+			maid:Give(thread)
+		end
+	end
+
 	if not s.enabled then
 		return
 	end
-	local r = Reactions.get(id)
 	if not r or #r.markers == 0 or (r.learned and not s.useLearned) then
+		return
+	end
+	if s.facingOnly and not facingMe(model) then
 		return
 	end
 
@@ -222,13 +295,18 @@ local function onPlayed(maid, model, track, rawId)
 		local thread
 		thread = task.delay(wait, function()
 			maid:Remove(thread, true)
-			if not Engine.settings.enabled then
+			if not Engine.settings.enabled or wasHit(model, now) then
 				return
 			end
 			if not track.IsPlaying and wait > 0.05 then
 				return
 			end
-			if distanceTo(model) > Engine.settings.range then
+			local hit = Engine.settings.useHitboxes and Reactions.hitNear(r, marker.t)
+			if hit then
+				if not insideHitbox(model, hit) then
+					return
+				end
+			elseif distanceTo(model) > Engine.settings.range then
 				return
 			end
 			Engine.send(action, hold)
@@ -240,11 +318,19 @@ end
 local function onDamaged()
 	local now = os.clock()
 	prune(now)
-	local best
+	local best, bestDistance
 	for _, p in ipairs(pending) do
-		if now - p.start > 0.05 and (not best or p.start > best.start) then
-			if distanceTo(p.model) <= Engine.settings.range + 6 then
-				best = p
+		if now - p.start > 0.05 and not wasHit(p.model, p.start) and not Reactions.isIgnored(p.id) then
+			local distance = distanceTo(p.model)
+			if
+				distance <= Engine.settings.range + 6
+				and (
+					not best
+					or distance < bestDistance - 2
+					or (math.abs(distance - bestDistance) <= 2 and p.start > best.start)
+				)
+			then
+				best, bestDistance = p, distance
 			end
 		end
 	end
@@ -289,6 +375,18 @@ end
 function Engine.start(maid)
 	Reactions.load()
 
+	Hitboxes.start(maid)
+	maid:Connect(Hitboxes.Recorded, function(id, t, size, offset)
+		HitboxView.show(LocalPlayer.Character, {
+			size = { size.X, size.Y, size.Z },
+			offset = { offset.X, offset.Y, offset.Z },
+		}, 0.35, 0, true)
+		local r, isNew = Reactions.addHit(id, t, size, offset, Engine.settings.learnAction)
+		if isNew then
+			Engine.Learned:Fire(id, r, "hitbox")
+		end
+	end)
+
 	local threads = maid:Extend()
 	maid:Connect(Tracker.Played, function(model, track, rawId)
 		onPlayed(threads, model, track, rawId)
@@ -313,6 +411,7 @@ function Engine.start(maid)
 
 	maid:Give(function()
 		running = false
+		HitboxView.clear()
 		table.clear(pending)
 		for code in pairs(held) do
 			pcall(release, code)
