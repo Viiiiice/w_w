@@ -96,7 +96,7 @@ local function release(code)
 	end
 end
 
-function Engine.send(action)
+function Engine.send(action, hold)
 	local code = keyCode(Engine.settings.keys[action] or "")
 	if not code then
 		return false
@@ -111,7 +111,7 @@ function Engine.send(action)
 	if action == "Block" then
 		held[code] = (held[code] or 0) + 1
 		pcall(press, code)
-		task.delay(Engine.settings.blockHold, function()
+		task.delay(hold or Engine.settings.blockHold, function()
 			held[code] -= 1
 			if held[code] <= 0 then
 				held[code] = nil
@@ -209,26 +209,32 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 	local r = Reactions.get(id)
-	if not r or not r.action or not r.hit or (r.learned and not s.useLearned) then
+	if not r or #r.markers == 0 or (r.learned and not s.useLearned) then
 		return
 	end
 
-	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead - Engine.pingOffset())
-	local thread
-	thread = task.delay(wait, function()
-		maid:Remove(thread, true)
-		if not Engine.settings.enabled then
-			return
-		end
-		if not track.IsPlaying and wait > 0.05 then
-			return
-		end
-		if distanceTo(model) > Engine.settings.range then
-			return
-		end
-		Engine.send(r.action)
-	end)
-	maid:Give(thread)
+	local speed = trackSpeed(track)
+	local early = s.lead + Engine.pingOffset()
+	for _, marker in ipairs(r.markers) do
+		local wait = math.max(0, marker.t / speed - early)
+		local action = marker.action
+		local hold = marker.hold and marker.hold / speed or nil
+		local thread
+		thread = task.delay(wait, function()
+			maid:Remove(thread, true)
+			if not Engine.settings.enabled then
+				return
+			end
+			if not track.IsPlaying and wait > 0.05 then
+				return
+			end
+			if distanceTo(model) > Engine.settings.range then
+				return
+			end
+			Engine.send(action, hold)
+		end)
+		maid:Give(thread)
+	end
 end
 
 local function onDamaged()

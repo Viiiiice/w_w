@@ -27,7 +27,7 @@ return {
 		Lead = 0.08,
 		BlockHold = 0.45,
 		LearnWindow = 1.5,
-		Cooldown = 0.3,
+		Cooldown = 0.08,
 		MaxSamples = 8,
 		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},

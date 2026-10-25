@@ -22,13 +22,9 @@ function AutoReact.build(Tab, ctx)
 
 	local Main = Tab:AddLeftGroupbox("Auto react")
 
-	Main:AddLabel(
-		"When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning.",
-		true
-	)
-
 	Main:AddToggle("ReactEnabled", {
 		Text = "Enabled",
+		Tooltip = "Presses the key at the hit time when someone near you plays a reaction animation. Set reactions in the preview window or turn on learning",
 		Default = false,
 		Risky = true,
 		Callback = function(value)
@@ -83,7 +79,8 @@ function AutoReact.build(Tab, ctx)
 
 	local Ping = Tab:AddLeftGroupbox("Ping")
 
-	local pingInfo = Ping:AddLabel("Ping: ...", true)
+	local pingInfo = Ping:AddLabel("Ping: ...")
+	local earlyInfo = Ping:AddLabel("Pressing early: ...")
 
 	Ping:AddDropdown("ReactPingMode", {
 		Text = "Ping adjustment",
@@ -172,13 +169,9 @@ function AutoReact.build(Tab, ctx)
 
 	local Learn = Tab:AddRightGroupbox("Learn from damage")
 
-	Learn:AddLabel(
-		"When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable.",
-		true
-	)
-
 	Learn:AddToggle("ReactLearn", {
 		Text = "Learn from damage",
+		Tooltip = "When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable",
 		Default = false,
 		Callback = function(value)
 			settings.learn = value
@@ -217,12 +210,12 @@ function AutoReact.build(Tab, ctx)
 
 	local Saved = Tab:AddRightGroupbox("Saved reactions")
 
-	local summary = Saved:AddLabel("0 saved for this game", true)
+	local summary = Saved:AddLabel("0 saved for this game")
 
 	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
-			if r.action or r.hit then
+			if #r.markers > 0 then
 				table.insert(ids, id)
 			end
 		end
@@ -313,16 +306,18 @@ function AutoReact.build(Tab, ctx)
 			end
 			pcall(function()
 				local offset = Engine.pingOffset()
-				local text = string.format(
-					"Ping: %d ms\nPressing %d ms early (%d ping + %d press early)",
-					math.floor(Engine.ping() * 1000 + 0.5),
+				local ping = string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5))
+				local early = string.format(
+					"Pressing %d ms early (%d + %d)",
 					math.floor((offset + settings.lead) * 1000 + 0.5),
 					math.floor(offset * 1000 + 0.5),
 					math.floor(settings.lead * 1000 + 0.5)
 				)
+				local text = ping .. early
 				if text ~= lastPing then
 					lastPing = text
-					pingInfo:SetText(text)
+					pingInfo:SetText(ping)
+					earlyInfo:SetText(early)
 				end
 			end)
 			task.wait(0.5)

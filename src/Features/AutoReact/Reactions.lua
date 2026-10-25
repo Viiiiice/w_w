@@ -22,6 +22,29 @@ end
 
 Reactions.cleanId = cleanId
 
+local function sortMarkers(r)
+	table.sort(r.markers, function(a, b)
+		return a.t < b.t
+	end)
+end
+
+local function migrate(r)
+	r.samples = r.samples or {}
+	r.markers = r.markers or {}
+	if #r.markers == 0 and r.action and r.hit then
+		table.insert(r.markers, { t = r.hit, action = r.action })
+	end
+	r.action, r.hit, r.manualHit = nil, nil, nil
+	for _, m in ipairs(r.markers) do
+		m.t = tonumber(m.t) or 0
+		if m.action ~= "Block" then
+			m.hold = nil
+		end
+	end
+	sortMarkers(r)
+	return r
+end
+
 function Reactions.load()
 	table.clear(Reactions.data)
 	if not (readfile and isfile) then
@@ -37,8 +60,7 @@ function Reactions.load()
 	if decoded and type(data) == "table" then
 		for id, r in pairs(data) do
 			if type(r) == "table" then
-				r.samples = r.samples or {}
-				Reactions.data[tostring(id)] = r
+				Reactions.data[tostring(id)] = migrate(r)
 			end
 		end
 	end
@@ -64,41 +86,74 @@ function Reactions.save()
 	end)
 end
 
+local function changed(id)
+	Reactions.Changed:Fire(id)
+	Reactions.save()
+end
+
 function Reactions.get(id)
 	return Reactions.data[cleanId(id) or ""]
+end
+
+function Reactions.markers(id)
+	local r = Reactions.get(id)
+	return r and r.markers or {}
+end
+
+function Reactions.has(id)
+	return #Reactions.markers(id) > 0
 end
 
 local function ensure(id)
 	local r = Reactions.data[id]
 	if not r then
-		r = { samples = {} }
+		r = { samples = {}, markers = {} }
 		Reactions.data[id] = r
 	end
 	return r
 end
 
-function Reactions.setAction(id, action)
+function Reactions.addMarker(id, t, action, hold)
 	id = cleanId(id)
 	if not id then
 		return
 	end
 	local r = ensure(id)
-	r.action = action
 	r.learned = false
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	local marker = { t = math.max(0, t), action = action, hold = action == "Block" and hold or nil }
+	table.insert(r.markers, marker)
+	sortMarkers(r)
+	changed(id)
+	return table.find(r.markers, marker)
 end
 
-function Reactions.setHit(id, hit)
+function Reactions.updateMarker(id, index, fields)
 	id = cleanId(id)
-	if not id then
-		return
+	local r = id and Reactions.data[id]
+	local marker = r and r.markers[index]
+	if not marker then
+		return index
 	end
-	local r = ensure(id)
-	r.hit = math.max(0, hit)
-	r.manualHit = true
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	for k, v in pairs(fields) do
+		marker[k] = v
+	end
+	marker.t = math.max(0, marker.t)
+	if marker.action ~= "Block" then
+		marker.hold = nil
+	end
+	r.learned = false
+	sortMarkers(r)
+	changed(id)
+	return table.find(r.markers, marker)
+end
+
+function Reactions.removeMarker(id, index)
+	id = cleanId(id)
+	local r = id and Reactions.data[id]
+	if r and r.markers[index] then
+		table.remove(r.markers, index)
+		changed(id)
+	end
 end
 
 function Reactions.addSample(id, hit, defaultAction)
@@ -113,17 +168,14 @@ function Reactions.addSample(id, hit, defaultAction)
 		table.remove(samples, 1)
 	end
 
-	if not r.manualHit then
+	if r.learned or #r.markers == 0 then
 		local sorted = table.clone(samples)
 		table.sort(sorted)
-		r.hit = sorted[math.ceil(#sorted / 2)]
-	end
-	if not r.action then
-		r.action = defaultAction
+		local action = r.markers[1] and r.markers[1].action or defaultAction
+		r.markers = { { t = sorted[math.ceil(#sorted / 2)], action = action } }
 		r.learned = true
 	end
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	changed(id)
 	return r
 end
 
@@ -131,33 +183,40 @@ function Reactions.clear(id)
 	id = cleanId(id)
 	if id and Reactions.data[id] then
 		Reactions.data[id] = nil
-		Reactions.Changed:Fire(id)
-		Reactions.save()
+		changed(id)
 	end
 end
 
 function Reactions.clearAll()
 	table.clear(Reactions.data)
-	Reactions.Changed:Fire()
-	Reactions.save()
+	changed(nil)
 end
 
-function Reactions.count()
-	local n = 0
-	for _ in pairs(Reactions.data) do
-		n += 1
+function Reactions.describeMarker(m)
+	if m.action == "Block" and m.hold then
+		return string.format("%s %.2fs (hold %.2fs)", m.action, m.t, m.hold)
 	end
-	return n
+	return string.format("%s %.2fs", m.action, m.t)
 end
 
 function Reactions.describe(id)
 	local r = Reactions.get(id)
-	if not r or not r.action then
+	if not r or #r.markers == 0 then
 		return "No reaction set"
 	end
-	local hit = r.hit and string.format("%.2fs", r.hit) or "no hit time"
-	local extra = #r.samples > 0 and string.format(", %d sample(s)", #r.samples) or ""
-	return string.format("%s at %s%s%s", r.action, hit, extra, r.learned and " (learned)" or "")
+	local parts = {}
+	for i, m in ipairs(r.markers) do
+		if i > 3 then
+			table.insert(parts, string.format("+%d more", #r.markers - 3))
+			break
+		end
+		table.insert(parts, Reactions.describeMarker(m))
+	end
+	local text = table.concat(parts, ", ")
+	if r.learned then
+		text ..= string.format(" (learned, %d sample(s))", #r.samples)
+	end
+	return text
 end
 
 return Reactions

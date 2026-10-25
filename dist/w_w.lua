@@ -48,7 +48,7 @@ return {
 		Lead = 0.08,
 		BlockHold = 0.45,
 		LearnWindow = 1.5,
-		Cooldown = 0.3,
+		Cooldown = 0.08,
 		MaxSamples = 8,
 		Keys = { Parry = "F", Block = "F", Dash = "Q" },
 	},
@@ -262,25 +262,34 @@ local ContextActionService = Services.ContextActionService
 
 local PreviewWindow = {}
 
-local THEME = {
-	bg = Color3.fromRGB(28, 28, 32),
-	bar = Color3.fromRGB(38, 38, 44),
-	button = Color3.fromRGB(50, 50, 58),
-	accent = Color3.fromRGB(96, 165, 250),
-	text = Color3.fromRGB(240, 240, 240),
-	sub = Color3.fromRGB(160, 160, 170),
-	viewport = Color3.fromRGB(20, 20, 24),
+local DEFAULT_THEME = {
+	FontColor = Color3.fromRGB(255, 255, 255),
+	MainColor = Color3.fromRGB(28, 28, 28),
+	BackgroundColor = Color3.fromRGB(20, 20, 20),
+	AccentColor = Color3.fromRGB(0, 85, 255),
+	OutlineColor = Color3.fromRGB(50, 50, 50),
+	DisabledTextColor = Color3.fromRGB(142, 142, 142),
+	RiskColor = Color3.fromRGB(255, 50, 50),
+	Black = Color3.new(0, 0, 0),
+}
+local ACTION_COLORS = {
+	Block = Color3.fromRGB(255, 170, 60),
+	Dash = Color3.fromRGB(90, 220, 120),
 }
 
 local SPEEDS = { 0.25, 0.5, 1, 1.5, 2 }
 local MAX_LIST_ITEMS = 200
-local LIST_WIDTH = 190
-local MIN_SIZE = Vector2.new(320 + LIST_WIDTH, 420)
-local MAX_SIZE = Vector2.new(1400, 1000)
+local LIST_WIDTH = 180
+local MARKER_WIDTH = 190
+local MIN_SIZE = Vector2.new(660, 430)
+local MAX_SIZE = Vector2.new(1600, 1000)
+local HOLD_STEP = 0.05
 local BLOCK_CAMERA_ACTION = "w_wPreviewBlockCamera"
 
+local library
 local gui
 local ui = {}
+local themed = {}
 local uiMaid = Maid.new()
 local state = {
 	finished = false,
@@ -298,44 +307,169 @@ local state = {
 	height = 0,
 	search = "",
 	listDirty = true,
+	markersDirty = true,
 	lastListRefresh = 0,
+	lastThemeCheck = 0,
+	themeKey = "",
 	scrubbing = false,
 	orbiting = false,
 	cameraBlocked = false,
+	action = "Parry",
+	hold = 0.45,
+	markerIndex = nil,
+	confirmClear = 0,
 }
+
+local function color(key)
+	if library and typeof(library[key]) == "Color3" then
+		return library[key]
+	end
+	return DEFAULT_THEME[key]
+end
+
+local function font()
+	return library and typeof(library.Font) == "EnumItem" and library.Font or Enum.Font.Code
+end
+
+local function theme(inst, props)
+	themed[inst] = props
+	for prop, key in pairs(props) do
+		inst[prop] = color(key)
+	end
+	return inst
+end
+
+local function applyTheme()
+	for inst, props in pairs(themed) do
+		if inst.Parent then
+			for prop, key in pairs(props) do
+				inst[prop] = color(key)
+			end
+		else
+			themed[inst] = nil
+		end
+	end
+end
+
+local function themeKey()
+	local parts = {}
+	for key in pairs(DEFAULT_THEME) do
+		table.insert(parts, key .. tostring(color(key)))
+	end
+	table.sort(parts)
+	return table.concat(parts)
+end
 
 local function new(class, props, children)
 	local inst = Instance.new(class)
 	for k, v in pairs(props) do
 		inst[k] = v
 	end
-
 	for _, child in ipairs(children or {}) do
 		child.Parent = inst
 	end
-
 	return inst
 end
 
-local function corner(r)
-	return new("UICorner", { CornerRadius = UDim.new(0, r or 6) })
+local function label(props)
+	local colorKey = props.ColorKey or "FontColor"
+	props.ColorKey = nil
+	local l = new("TextLabel", {
+		BackgroundTransparency = 1,
+		Font = font(),
+		TextSize = 14,
+		TextStrokeTransparency = 0,
+		TextXAlignment = Enum.TextXAlignment.Left,
+		TextTruncate = Enum.TextTruncate.AtEnd,
+	})
+	for k, v in pairs(props) do
+		l[k] = v
+	end
+	theme(l, { TextColor3 = colorKey })
+	return l
 end
 
-local function button(text, width, parent)
-	return new("TextButton", {
-		Size = UDim2.fromOffset(width, 26),
-		BackgroundColor3 = THEME.button,
-		Text = text,
-		TextColor3 = THEME.text,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
-		AutoButtonColor = true,
+local function highlight(outer, idleKey)
+	outer.MouseEnter:Connect(function()
+		outer.BorderColor3 = color("AccentColor")
+	end)
+	outer.MouseLeave:Connect(function()
+		outer.BorderColor3 = color(idleKey or "Black")
+	end)
+end
+
+local function button(parent, text, size)
+	local outer = new("TextButton", {
+		Size = size or UDim2.new(1, 0, 0, 20),
+		BorderSizePixel = 1,
+		AutoButtonColor = false,
+		Text = "",
 		Parent = parent,
-	}, { corner(5) })
+	})
+	theme(outer, { BackgroundColor3 = "Black", BorderColor3 = "Black" })
+	local inner = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = outer,
+	}, {
+		new("UIGradient", {
+			Color = ColorSequence.new(Color3.new(1, 1, 1), Color3.fromRGB(212, 212, 212)),
+			Rotation = 90,
+		}),
+	})
+	theme(inner, { BackgroundColor3 = "MainColor", BorderColor3 = "OutlineColor" })
+	local text_ = label({
+		Size = UDim2.fromScale(1, 1),
+		Text = text,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = inner,
+	})
+	highlight(outer)
+	return outer, text_
 end
 
-local function setStatus(text)
+local function groupbox(parent, title, position, size)
+	local outer = new("Frame", {
+		Position = position,
+		Size = size,
+		BorderSizePixel = 1,
+		Parent = parent,
+	})
+	theme(outer, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "OutlineColor" })
+	local inner = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = outer,
+	})
+	theme(inner, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "Black" })
+	theme(new("Frame", { Size = UDim2.new(1, 0, 0, 2), BorderSizePixel = 0, Parent = inner }), {
+		BackgroundColor3 = "AccentColor",
+	})
+	label({ Size = UDim2.new(1, -8, 0, 18), Position = UDim2.fromOffset(4, 2), Text = title, Parent = inner })
+	return new("Frame", {
+		Size = UDim2.new(1, -8, 1, -26),
+		Position = UDim2.fromOffset(4, 22),
+		BackgroundTransparency = 1,
+		Parent = inner,
+	})
+end
+
+local function row(parent, position)
+	return new("Frame", {
+		Size = UDim2.new(1, 0, 0, 20),
+		Position = position,
+		BackgroundTransparency = 1,
+		Parent = parent,
+	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }) })
+end
+
+local function setStatus(text, isError)
+	local key = isError and "RiskColor" or "DisabledTextColor"
 	ui.status.Text = text or ""
+	themed[ui.status] = { TextColor3 = key }
+	ui.status.TextColor3 = color(key)
 end
 
 local function speed()
@@ -346,9 +480,8 @@ local function applySpeed()
 	if state.track then
 		state.track:AdjustSpeed(state.playing and speed() or 0)
 	end
-
 	ui.speed.Text = string.format("%gx", speed())
-	ui.play.Text = state.playing and "Pause" or "Play"
+	ui.playLabel.Text = state.playing and "Pause" or "Play"
 end
 
 local function stopTrack()
@@ -371,7 +504,7 @@ local function loadTrack(animator)
 	local ok, track = pcall(animator.LoadAnimation, animator, animation)
 	if not ok or not track then
 		animation:Destroy()
-		setStatus("Couldn't load this animation (it may belong to another game/group).")
+		setStatus("Couldn't load this animation (it may belong to another game/group).", true)
 		return
 	end
 
@@ -386,6 +519,7 @@ local function loadTrack(animator)
 	track:Play(0)
 	state.track, state.animation = track, animation
 	state.finished = false
+	state.markersDirty = true
 	applySpeed()
 end
 
@@ -408,7 +542,7 @@ local function rebuildRig()
 	local owner = state.entry.ownerList[1]
 	local rig, animator = Rig.build(Rig.findSource(state.rigKind, owner))
 	if not rig then
-		setStatus(animator)
+		setStatus(animator, true)
 		return
 	end
 
@@ -427,34 +561,66 @@ local function escape(text)
 	return (text:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"))
 end
 
-local function rowFor(i)
-	local row = ui.rows[i]
-	if row then
-		return row
+local function setRowSelected(r, selected)
+	r.selected = selected
+	local border = selected and "AccentColor" or "OutlineColor"
+	local text = selected and "AccentColor" or "FontColor"
+	themed[r.button] = { BackgroundColor3 = "MainColor", BorderColor3 = border }
+	themed[r.text] = { TextColor3 = text }
+	r.button.BorderColor3 = color(border)
+	r.text.TextColor3 = color(text)
+end
+
+local function listRow(list, rows, i, height, onClick)
+	local r = rows[i]
+	if r then
+		return r
 	end
 
-	row = new("TextButton", {
-		Size = UDim2.new(1, 0, 0, 34),
-		BackgroundColor3 = THEME.button,
-		AutoButtonColor = true,
-		RichText = true,
+	local outer = new("TextButton", {
+		Size = UDim2.new(1, -5, 0, height),
+		BorderSizePixel = 1,
+		AutoButtonColor = false,
 		Text = "",
-		TextColor3 = THEME.text,
-		Font = Enum.Font.Gotham,
-		TextSize = 12,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Parent = ui.list,
-	}, { corner(5), new("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6) }) })
-	row.MouseButton1Click:Connect(function()
-		local entry = row:GetAttribute("AnimId") and Logger.get(row:GetAttribute("AnimId"))
-		if entry then
-			PreviewWindow.show(entry)
-		end
+		Parent = list,
+	})
+	theme(outer, { BackgroundColor3 = "MainColor", BorderColor3 = "OutlineColor" })
+	local text = label({
+		Size = UDim2.new(1, -10, 1, 0),
+		Position = UDim2.fromOffset(5, 0),
+		RichText = true,
+		Parent = outer,
+	})
+	r = { button = outer, text = text, selected = false }
+	outer.MouseEnter:Connect(function()
+		outer.BorderColor3 = color("AccentColor")
 	end)
+	outer.MouseLeave:Connect(function()
+		outer.BorderColor3 = color(r.selected and "AccentColor" or "OutlineColor")
+	end)
+	outer.MouseButton1Click:Connect(function()
+		onClick(r)
+	end)
+	rows[i] = r
+	return r
+end
 
-	ui.rows[i] = row
-	return row
+local function scrollList(parent, position, size)
+	local list = new("ScrollingFrame", {
+		Position = position,
+		Size = size,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		ScrollBarThickness = 3,
+		CanvasSize = UDim2.new(),
+		AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Parent = parent,
+	}, {
+		new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }),
+		new("UIPadding", { PaddingTop = UDim.new(0, 1), PaddingLeft = UDim.new(0, 1) }),
+	})
+	theme(list, { ScrollBarImageColor3 = "AccentColor" })
+	return list
 end
 
 local function refreshList()
@@ -464,42 +630,187 @@ local function refreshList()
 	local list = Logger.list({ text = state.search })
 	local selectedId = state.entry and state.entry.id
 	local count = math.min(#list, MAX_LIST_ITEMS)
+	local sub = color("DisabledTextColor"):ToHex()
+	local accent = color("AccentColor"):ToHex()
 
 	for i = 1, count do
 		local entry = list[i]
-		local row = rowFor(i)
-		row.LayoutOrder = i
-		row.Visible = true
-		row:SetAttribute("AnimId", entry.id)
-		row.Text = string.format(
-			'<b>%s</b>\n<font size="10" color="#a0a0aa">%s</font>',
+		local r = listRow(ui.list, ui.rows, i, 32, function(r)
+			local e = r.id and Logger.get(r.id)
+			if e then
+				PreviewWindow.show(e)
+			end
+		end)
+		r.id = entry.id
+		r.button.LayoutOrder = i
+		r.button.Visible = true
+		local tag = Reactions.has(entry.id) and string.format(' <font color="#%s">●</font>', accent) or ""
+		r.text.Text = string.format(
+			'%s%s\n<font size="12" color="#%s">%s</font>',
 			escape(entry.name),
+			tag,
+			sub,
 			entry.id
 		)
-		row.BackgroundColor3 = entry.id == selectedId and THEME.accent or THEME.button
+		setRowSelected(r, entry.id == selectedId)
 	end
 	for i = count + 1, #ui.rows do
-		ui.rows[i].Visible = false
+		ui.rows[i].button.Visible = false
 	end
 
 	ui.empty.Visible = count == 0
 	ui.empty.Text = Logger.count == 0 and "No animations logged yet." or "No matches."
 end
 
-local function updateReaction()
-	if not ui.reaction then
+local function currentMarkers()
+	return state.entry and Reactions.markers(state.entry.id) or {}
+end
+
+local function markerColor(action)
+	return ACTION_COLORS[action] or color("AccentColor")
+end
+
+local function updateMarkerControls()
+	ui.actionLabel.Text = "Action: " .. state.action
+	themed[ui.actionLabel] = nil
+	ui.actionLabel.TextColor3 = markerColor(state.action)
+	ui.holdLabel.Text = string.format("Hold %.2fs", state.hold)
+	ui.holdRow.Visible = state.action == "Block"
+end
+
+local function refreshTicks(markers)
+	local track = state.track
+	local length = track and track.Length or 0
+	for i, m in ipairs(markers) do
+		local tick = ui.ticks[i]
+		if not tick then
+			tick = {
+				line = new("Frame", {
+					AnchorPoint = Vector2.new(0.5, 0.5),
+					BorderSizePixel = 0,
+					ZIndex = 4,
+					Parent = ui.timelineInner,
+				}),
+				span = new("Frame", {
+					AnchorPoint = Vector2.new(0, 0.5),
+					BorderSizePixel = 0,
+					BackgroundTransparency = 0.55,
+					ZIndex = 3,
+					Parent = ui.timelineInner,
+				}),
+			}
+			ui.ticks[i] = tick
+		end
+		local visible = length > 0
+		local x = visible and math.clamp(m.t / length, 0, 1) or 0
+		local c = markerColor(m.action)
+		local selected = i == state.markerIndex
+		tick.line.Visible = visible
+		tick.line.BackgroundColor3 = selected and color("FontColor") or c
+		tick.line.Position = UDim2.fromScale(x, 0.5)
+		tick.line.Size = UDim2.new(0, selected and 3 or 2, 1, selected and 8 or 4)
+		local hasSpan = visible and m.action == "Block" and (m.hold or 0) > 0
+		tick.span.Visible = hasSpan
+		if hasSpan then
+			tick.span.BackgroundColor3 = c
+			tick.span.Position = UDim2.fromScale(x, 0.5)
+			tick.span.Size = UDim2.fromScale(math.clamp(m.hold / length, 0, 1 - x), 1)
+		end
+	end
+	for i = #markers + 1, #ui.ticks do
+		ui.ticks[i].line.Visible = false
+		ui.ticks[i].span.Visible = false
+	end
+end
+
+local function refreshMarkers()
+	state.markersDirty = false
+	local markers = currentMarkers()
+	if state.markerIndex and not markers[state.markerIndex] then
+		state.markerIndex = nil
+	end
+
+	for i, m in ipairs(markers) do
+		local r = listRow(ui.markerList, ui.markerRows, i, 20, function(r)
+			PreviewWindow.selectMarker(r.index)
+		end)
+		r.index = i
+		r.button.LayoutOrder = i
+		r.button.Visible = true
+		local hold = m.action == "Block" and m.hold and string.format("  hold %.2f", m.hold) or ""
+		r.text.Text = string.format(
+			'%d  <font color="#%s">%s</font>  %.2fs%s',
+			i,
+			markerColor(m.action):ToHex(),
+			m.action,
+			m.t,
+			hold
+		)
+		setRowSelected(r, i == state.markerIndex)
+	end
+	for i = #markers + 1, #ui.markerRows do
+		ui.markerRows[i].button.Visible = false
+	end
+
+	local r = state.entry and Reactions.get(state.entry.id)
+	if not state.entry then
+		ui.markerInfo.Text = "Pick an animation first."
+	elseif #markers == 0 then
+		ui.markerInfo.Text = "Scrub to a hit, then add one."
+	elseif r and r.learned then
+		ui.markerInfo.Text = string.format("Learned from %d hit(s).", #r.samples)
+	else
+		ui.markerInfo.Text = string.format("%d marker(s).", #markers)
+	end
+
+	refreshTicks(markers)
+end
+
+local function pauseAt(t)
+	local track = state.track
+	if not track or track.Length <= 0 then
 		return
 	end
-	local id = state.entry and state.entry.id
-	local r = id and Reactions.get(id)
-	for action, b in pairs(ui.actionButtons) do
-		b.BackgroundColor3 = (r and r.action == action) and THEME.accent or THEME.button
+	if not track.IsPlaying then
+		track:Play(0)
+		state.finished = false
 	end
-	if not id then
-		ui.reaction.Text = "Pick an animation to set a reaction."
-	else
-		ui.reaction.Text = Reactions.describe(id) .. "  •  scrub to the hit frame, then Set hit here"
+	track.TimePosition = math.clamp(t, 0, track.Length)
+	state.playing = false
+	applySpeed()
+end
+
+function PreviewWindow.selectMarker(index)
+	local m = currentMarkers()[index]
+	if not m then
+		return
 	end
+	state.markerIndex = index
+	state.action = m.action
+	if m.hold then
+		state.hold = m.hold
+	end
+	updateMarkerControls()
+	pauseAt(m.t)
+	state.markersDirty = true
+end
+
+local function editSelected(fields)
+	if state.entry and state.markerIndex then
+		state.markerIndex = Reactions.updateMarker(state.entry.id, state.markerIndex, fields)
+	end
+end
+
+local function sink()
+	return Enum.ContextActionResult.Sink
+end
+
+local function pressed(input)
+	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+end
+
+local function moved(input)
+	return input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch
 end
 
 local function build()
@@ -512,166 +823,174 @@ local function build()
 		Enabled = false,
 	})
 
-	local main = new("Frame", {
-		Size = UDim2.fromOffset(320 + LIST_WIDTH, 460),
-		Position = UDim2.new(1, -(340 + LIST_WIDTH), 0.5, -230),
-		BackgroundColor3 = THEME.bg,
+	local outer = new("Frame", {
+		Size = UDim2.fromOffset(720, 470),
+		Position = UDim2.new(0.5, -360, 0.5, -235),
 		BorderSizePixel = 0,
 		Parent = gui,
-	}, { corner(8), new("UIStroke", { Color = THEME.bar, Thickness = 1 }) })
-	ui.main = main
-
-	local bar = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 32),
-		BackgroundColor3 = THEME.bar,
-		BorderSizePixel = 0,
-		Parent = main,
-	}, { corner(8) })
-	ui.title = new("TextLabel", {
-		Size = UDim2.new(1, -44, 1, 0),
-		Position = UDim2.fromOffset(10, 0),
-		BackgroundTransparency = 1,
-		Text = "Preview",
-		TextColor3 = THEME.text,
-		Font = Enum.Font.GothamBold,
-		TextSize = 13,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
-		Parent = bar,
 	})
-	local close = button("X", 24, bar)
-	close.Size = UDim2.fromOffset(24, 22)
-	close.Position = UDim2.new(1, -30, 0, 5)
+	theme(outer, { BackgroundColor3 = "Black" })
+	ui.main = outer
+
+	local inner = new("Frame", {
+		Position = UDim2.fromOffset(1, 1),
+		Size = UDim2.new(1, -2, 1, -2),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = outer,
+	})
+	theme(inner, { BackgroundColor3 = "MainColor", BorderColor3 = "AccentColor" })
+
+	ui.title = label({
+		Position = UDim2.fromOffset(7, 0),
+		Size = UDim2.new(1, -40, 0, 25),
+		Text = "Preview",
+		Parent = inner,
+	})
+
+	local close = new("TextButton", {
+		Size = UDim2.fromOffset(25, 25),
+		Position = UDim2.new(1, -27, 0, 0),
+		BackgroundTransparency = 1,
+		Text = "X",
+		Font = font(),
+		TextSize = 14,
+		TextStrokeTransparency = 0,
+		Parent = inner,
+	})
+	theme(close, { TextColor3 = "FontColor" })
+	close.MouseEnter:Connect(function()
+		close.TextColor3 = color("RiskColor")
+	end)
+	close.MouseLeave:Connect(function()
+		close.TextColor3 = color("FontColor")
+	end)
 	close.MouseButton1Click:Connect(PreviewWindow.close)
 
 	do
 		local dragging, start, startPos
-		bar.InputBegan:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
-				dragging, start, startPos = true, input.Position, main.Position
+		inner.InputBegan:Connect(function(input)
+			if pressed(input) and input.Position.Y - outer.AbsolutePosition.Y <= 25 then
+				dragging, start, startPos = true, input.Position, outer.Position
 			end
 		end)
-		uiMaid:Give(UserInputService.InputChanged:Connect(function(input)
-			if
-				dragging
-				and (
-					input.UserInputType == Enum.UserInputType.MouseMovement
-					or input.UserInputType == Enum.UserInputType.Touch
-				)
-			then
+		uiMaid:Connect(UserInputService.InputChanged, function(input)
+			if dragging and moved(input) then
 				local d = input.Position - start
-				main.Position = UDim2.new(
+				outer.Position = UDim2.new(
 					startPos.X.Scale,
 					startPos.X.Offset + d.X,
 					startPos.Y.Scale,
 					startPos.Y.Offset + d.Y
 				)
 			end
-		end))
-		uiMaid:Give(UserInputService.InputEnded:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
+		end)
+		uiMaid:Connect(UserInputService.InputEnded, function(input)
+			if pressed(input) then
 				dragging = false
 			end
-		end))
+		end)
 	end
 
-	local side = new("Frame", {
-		Size = UDim2.new(0, LIST_WIDTH - 8, 1, -48),
-		Position = UDim2.fromOffset(8, 40),
-		BackgroundColor3 = THEME.bar,
-		BorderSizePixel = 0,
-		Parent = main,
-	}, { corner(6) })
+	local section = new("Frame", {
+		Position = UDim2.fromOffset(8, 25),
+		Size = UDim2.new(1, -16, 1, -33),
+		BorderSizePixel = 1,
+		Parent = inner,
+	})
+	theme(section, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "OutlineColor" })
+	local sectionInner = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = section,
+	})
+	theme(sectionInner, { BackgroundColor3 = "BackgroundColor", BorderColor3 = "Black" })
 
+	local side = groupbox(sectionInner, "Animations", UDim2.fromOffset(6, 6), UDim2.new(0, LIST_WIDTH - 8, 1, -12))
+
+	local searchOuter = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 20),
+		BorderSizePixel = 1,
+		Parent = side,
+	})
+	theme(searchOuter, { BackgroundColor3 = "Black", BorderColor3 = "Black" })
+	local searchInner = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = searchOuter,
+	})
+	theme(searchInner, { BackgroundColor3 = "MainColor", BorderColor3 = "OutlineColor" })
 	ui.search = new("TextBox", {
-		Size = UDim2.new(1, -12, 0, 26),
-		Position = UDim2.fromOffset(6, 6),
-		BackgroundColor3 = THEME.button,
+		Size = UDim2.new(1, -10, 1, 0),
+		Position = UDim2.fromOffset(5, 0),
+		BackgroundTransparency = 1,
 		Text = "",
 		PlaceholderText = "Search...",
-		PlaceholderColor3 = THEME.sub,
-		TextColor3 = THEME.text,
-		Font = Enum.Font.Gotham,
-		TextSize = 12,
+		Font = font(),
+		TextSize = 14,
+		TextStrokeTransparency = 0,
 		ClearTextOnFocus = false,
 		TextXAlignment = Enum.TextXAlignment.Left,
-		Parent = side,
-	}, { corner(5), new("UIPadding", { PaddingLeft = UDim.new(0, 6) }) })
+		Parent = searchInner,
+	})
+	theme(ui.search, { TextColor3 = "FontColor", PlaceholderColor3 = "DisabledTextColor" })
+	highlight(searchOuter)
 	ui.search:GetPropertyChangedSignal("Text"):Connect(function()
 		state.search = ui.search.Text:lower()
 		state.listDirty = true
 	end)
 
-	ui.list = new("ScrollingFrame", {
-		Size = UDim2.new(1, -12, 1, -44),
-		Position = UDim2.fromOffset(6, 38),
-		BackgroundTransparency = 1,
-		BorderSizePixel = 0,
-		ScrollBarThickness = 3,
-		ScrollBarImageColor3 = THEME.accent,
-		CanvasSize = UDim2.new(),
-		AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		Parent = side,
-	}, { new("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }) })
-
-	ui.empty = new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 40),
-		BackgroundTransparency = 1,
+	ui.list = scrollList(side, UDim2.fromOffset(0, 26), UDim2.new(1, 0, 1, -26))
+	ui.empty = label({
+		Size = UDim2.new(1, 0, 0, 36),
 		Text = "No animations logged yet.",
-		TextColor3 = THEME.sub,
-		Font = Enum.Font.Gotham,
-		TextSize = 11,
 		TextWrapped = true,
+		TextTruncate = Enum.TextTruncate.None,
+		ColorKey = "DisabledTextColor",
 		Parent = ui.list,
 	})
 	ui.rows = {}
 
 	for _, signal in ipairs({ Logger.Added, Logger.Cleared }) do
-		uiMaid:Give(signal:Connect(function()
+		uiMaid:Connect(signal, function()
 			state.listDirty = true
-		end))
+		end)
 	end
-	uiMaid:Give(Logger.Updated:Connect(function(_, changed)
+	uiMaid:Connect(Logger.Updated, function(_, changed)
 		if changed then
 			state.listDirty = true
 		end
-	end))
+	end)
 
-	local content = new("Frame", {
-		Size = UDim2.new(1, -LIST_WIDTH, 1, 0),
-		Position = UDim2.fromOffset(LIST_WIDTH, 0),
-		BackgroundTransparency = 1,
-		Parent = main,
-	})
+	local content = groupbox(
+		sectionInner,
+		"Preview",
+		UDim2.fromOffset(LIST_WIDTH + 4, 6),
+		UDim2.new(1, -(LIST_WIDTH + MARKER_WIDTH + 8), 1, -12)
+	)
 
 	ui.viewport = new("ViewportFrame", {
-		Size = UDim2.new(1, -16, 1, -200),
-		Position = UDim2.fromOffset(8, 40),
-		BackgroundColor3 = THEME.viewport,
+		Size = UDim2.new(1, 0, 1, -98),
+		BorderSizePixel = 1,
 		Ambient = Color3.fromRGB(170, 170, 180),
 		LightColor = Color3.fromRGB(255, 255, 255),
 		LightDirection = Vector3.new(-1, -1, -1),
 		Parent = content,
-	}, { corner(6) })
+	})
+	theme(ui.viewport, { BackgroundColor3 = "MainColor", BorderColor3 = "OutlineColor" })
 	ui.world = new("WorldModel", { Parent = ui.viewport })
 	ui.camera = new("Camera", { FieldOfView = 40, Parent = ui.viewport })
 	ui.viewport.CurrentCamera = ui.camera
-	new("TextLabel", {
+	label({
 		Size = UDim2.new(1, -8, 0, 14),
 		Position = UDim2.new(0, 4, 1, -16),
-		BackgroundTransparency = 1,
 		Text = "drag to rotate • scroll to zoom",
-		TextColor3 = THEME.sub,
+		TextSize = 12,
 		TextTransparency = 0.3,
-		Font = Enum.Font.Gotham,
-		TextSize = 10,
 		TextXAlignment = Enum.TextXAlignment.Right,
+		ColorKey = "DisabledTextColor",
 		Parent = ui.viewport,
 	})
 
@@ -693,41 +1012,55 @@ local function build()
 				state.zoom = math.clamp(state.zoom - input.Position.Z * 0.8, 2, 40)
 			end
 		end)
-		uiMaid:Give(UserInputService.InputChanged:Connect(function(input)
-			if
-				state.orbiting
-				and (
-					input.UserInputType == Enum.UserInputType.MouseMovement
-					or input.UserInputType == Enum.UserInputType.Touch
-				)
-			then
+		uiMaid:Connect(UserInputService.InputChanged, function(input)
+			if state.orbiting and moved(input) then
 				local delta = input.Position - lastPos
 				lastPos = input.Position
 				state.yaw -= delta.X * 0.01
 				state.pitch = math.clamp(state.pitch + delta.Y * 0.01, -1.2, 1.2)
 			end
-		end))
-		uiMaid:Give(UserInputService.InputEnded:Connect(function(input)
+		end)
+		uiMaid:Connect(UserInputService.InputEnded, function(input)
 			if ORBIT_BUTTONS[input.UserInputType] then
 				state.orbiting = false
 			end
-		end))
+		end)
 	end
 
 	ui.timeline = new("TextButton", {
-		Size = UDim2.new(1, -16, 0, 10),
-		Position = UDim2.new(0, 8, 1, -153),
-		BackgroundColor3 = THEME.button,
-		Text = "",
+		Size = UDim2.new(1, 0, 0, 15),
+		Position = UDim2.new(0, 0, 1, -90),
+		BorderSizePixel = 1,
 		AutoButtonColor = false,
+		Text = "",
 		Parent = content,
-	}, { corner(4) })
+	})
+	theme(ui.timeline, { BackgroundColor3 = "Black", BorderColor3 = "Black" })
+	highlight(ui.timeline)
+	ui.timelineInner = new("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		BorderMode = Enum.BorderMode.Inset,
+		BorderSizePixel = 1,
+		Parent = ui.timeline,
+	})
+	theme(ui.timelineInner, { BackgroundColor3 = "MainColor", BorderColor3 = "OutlineColor" })
 	ui.progress = new("Frame", {
 		Size = UDim2.fromScale(0, 1),
-		BackgroundColor3 = THEME.accent,
 		BorderSizePixel = 0,
-		Parent = ui.timeline,
-	}, { corner(4) })
+		ZIndex = 2,
+		Parent = ui.timelineInner,
+	})
+	theme(ui.progress, { BackgroundColor3 = "AccentColor" })
+	ui.time = label({
+		Size = UDim2.fromScale(1, 1),
+		Text = "0.00s / 0.00s",
+		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Center,
+		ZIndex = 5,
+		Parent = ui.timelineInner,
+	})
+	ui.ticks = {}
+
 	local function seek(x)
 		local track = state.track
 		if not track or track.Length <= 0 then
@@ -743,47 +1076,27 @@ local function build()
 	end
 
 	ui.timeline.InputBegan:Connect(function(input)
-		if
-			input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
+		if pressed(input) then
 			state.scrubbing = true
 			seek(input.Position.X)
 		end
 	end)
-	uiMaid:Give(UserInputService.InputChanged:Connect(function(input)
-		if
-			state.scrubbing
-			and (
-				input.UserInputType == Enum.UserInputType.MouseMovement
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
+	uiMaid:Connect(UserInputService.InputChanged, function(input)
+		if state.scrubbing and moved(input) then
 			seek(input.Position.X)
 		end
-	end))
-	uiMaid:Give(UserInputService.InputEnded:Connect(function(input)
-		if
-			state.scrubbing
-			and (
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			)
-		then
+	end)
+	uiMaid:Connect(UserInputService.InputEnded, function(input)
+		if state.scrubbing and pressed(input) then
 			state.scrubbing = false
 			applySpeed()
 		end
-	end))
+	end)
 
-	local row1 = new("Frame", {
-		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -136),
-		BackgroundTransparency = 1,
-		Parent = content,
-	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
-
-	ui.play = button("Pause", 58, row1)
-	ui.play.MouseButton1Click:Connect(function()
+	local row1 = row(content, UDim2.new(0, 0, 1, -68))
+	local play
+	play, ui.playLabel = button(row1, "Pause", UDim2.fromOffset(56, 20))
+	play.MouseButton1Click:Connect(function()
 		state.playing = not state.playing
 		if state.playing and state.track and not state.track.IsPlaying then
 			state.finished = false
@@ -793,7 +1106,7 @@ local function build()
 		applySpeed()
 	end)
 
-	local restart = button("Restart", 58, row1)
+	local restart = button(row1, "Restart", UDim2.fromOffset(62, 20))
 	restart.MouseButton1Click:Connect(function()
 		if state.track then
 			state.playing = true
@@ -804,17 +1117,14 @@ local function build()
 		end
 	end)
 
-	local slower = button("-", 26, row1)
-	ui.speed = new("TextLabel", {
-		Size = UDim2.fromOffset(40, 26),
-		BackgroundTransparency = 1,
+	local slower = button(row1, "-", UDim2.fromOffset(20, 20))
+	ui.speed = label({
+		Size = UDim2.fromOffset(38, 20),
 		Text = "1x",
-		TextColor3 = THEME.text,
-		Font = Enum.Font.GothamMedium,
-		TextSize = 12,
+		TextXAlignment = Enum.TextXAlignment.Center,
 		Parent = row1,
 	})
-	local faster = button("+", 26, row1)
+	local faster = button(row1, "+", UDim2.fromOffset(20, 20))
 	slower.MouseButton1Click:Connect(function()
 		state.speedIndex = math.max(1, state.speedIndex - 1)
 		applySpeed()
@@ -824,159 +1134,181 @@ local function build()
 		applySpeed()
 	end)
 
-	local loop = button("Loop: on", 62, row1)
+	local loop, loopLabel = button(row1, "Loop: on", UDim2.fromOffset(70, 20))
 	loop.MouseButton1Click:Connect(function()
 		state.looped = not state.looped
-		loop.Text = state.looped and "Loop: on" or "Loop: off"
+		loopLabel.Text = state.looped and "Loop: on" or "Loop: off"
 		if state.track then
 			state.track.Looped = state.looped
 		end
 	end)
 
-	local row2 = new("Frame", {
-		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -104),
-		BackgroundTransparency = 1,
-		Parent = content,
-	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
-
-	local rigButton = button("Rig: my character", 150, row2)
+	local row2 = row(content, UDim2.new(0, 0, 1, -44))
+	local rigButton, rigLabel = button(row2, "Rig: my character", UDim2.fromOffset(150, 20))
 	rigButton.MouseButton1Click:Connect(function()
 		state.rigKind = state.rigKind == "Me" and "Owner" or "Me"
-		rigButton.Text = state.rigKind == "Me" and "Rig: my character" or "Rig: who played it"
+		rigLabel.Text = state.rigKind == "Me" and "Rig: my character" or "Rig: who played it"
 		rebuildRig()
 	end)
-
-	local camButton = button("Reset camera", 96, row2)
+	local camButton = button(row2, "Reset camera", UDim2.fromOffset(100, 20))
 	camButton.MouseButton1Click:Connect(resetCamera)
 
-	local row3 = new("Frame", {
-		Size = UDim2.new(1, -16, 0, 26),
-		Position = UDim2.new(0, 8, 1, -72),
-		BackgroundTransparency = 1,
-		Parent = content,
-	}, { new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6) }) })
-
-	ui.actionButtons = {}
-	for _, action in ipairs(Reactions.ACTIONS) do
-		local b = button(action, 48, row3)
-		ui.actionButtons[action] = b
-		b.MouseButton1Click:Connect(function()
-			if not state.entry then
-				return
-			end
-			local r = Reactions.get(state.entry.id)
-			if r and r.action == action and not r.learned then
-				Reactions.setAction(state.entry.id, nil)
-			else
-				Reactions.setAction(state.entry.id, action)
-			end
-		end)
-	end
-
-	local hitButton = button("Set hit here", 78, row3)
-	hitButton.MouseButton1Click:Connect(function()
-		if state.entry and state.track then
-			Reactions.setHit(state.entry.id, state.track.TimePosition)
-		end
-	end)
-
-	local clearButton = button("Clear", 44, row3)
-	clearButton.MouseButton1Click:Connect(function()
-		if state.entry then
-			Reactions.clear(state.entry.id)
-		end
-	end)
-
-	ui.reaction = new("TextLabel", {
-		Size = UDim2.new(1, -16, 0, 14),
-		Position = UDim2.new(0, 8, 1, -42),
-		BackgroundTransparency = 1,
+	ui.status = label({
+		Size = UDim2.new(1, 0, 0, 18),
+		Position = UDim2.new(0, 0, 1, -20),
 		Text = "",
-		TextColor3 = THEME.sub,
-		Font = Enum.Font.Gotham,
-		TextSize = 11,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		TextTruncate = Enum.TextTruncate.AtEnd,
+		TextSize = 13,
+		ColorKey = "DisabledTextColor",
 		Parent = content,
 	})
 
-	ui.hitMarker = new("Frame", {
-		Size = UDim2.new(0, 2, 1, 6),
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = UDim2.fromScale(0, 0.5),
-		BackgroundColor3 = Color3.fromRGB(250, 110, 110),
-		BorderSizePixel = 0,
-		Visible = false,
-		ZIndex = 3,
-		Parent = ui.timeline,
+	local markers = groupbox(
+		sectionInner,
+		"Markers",
+		UDim2.new(1, -(MARKER_WIDTH + 2), 0, 6),
+		UDim2.new(0, MARKER_WIDTH - 4, 1, -12)
+	)
+
+	local actionButton
+	actionButton, ui.actionLabel = button(markers, "Action: Parry", UDim2.new(1, 0, 0, 20))
+	actionButton.MouseButton1Click:Connect(function()
+		local i = table.find(Reactions.ACTIONS, state.action) or 0
+		state.action = Reactions.ACTIONS[i % #Reactions.ACTIONS + 1]
+		updateMarkerControls()
+		editSelected({ action = state.action, hold = state.action == "Block" and state.hold or nil })
+	end)
+
+	ui.holdRow = row(markers, UDim2.fromOffset(0, 25))
+	local holdLess = button(ui.holdRow, "-", UDim2.fromOffset(22, 20))
+	ui.holdLabel = label({
+		Size = UDim2.new(1, -52, 0, 20),
+		Text = "Hold 0.45s",
+		TextXAlignment = Enum.TextXAlignment.Center,
+		Parent = ui.holdRow,
 	})
+	local holdMore = button(ui.holdRow, "+", UDim2.fromOffset(22, 20))
+	local function nudgeHold(delta)
+		state.hold = math.clamp(math.floor((state.hold + delta) / HOLD_STEP + 0.5) * HOLD_STEP, HOLD_STEP, 5)
+		updateMarkerControls()
+		local m = state.markerIndex and currentMarkers()[state.markerIndex]
+		if m and m.action == "Block" then
+			editSelected({ hold = state.hold })
+		end
+	end
+	holdLess.MouseButton1Click:Connect(function()
+		nudgeHold(-HOLD_STEP)
+	end)
+	holdMore.MouseButton1Click:Connect(function()
+		nudgeHold(HOLD_STEP)
+	end)
+
+	local add = button(markers, "Add marker here", UDim2.new(1, 0, 0, 20))
+	add.Position = UDim2.fromOffset(0, 50)
+	add.MouseButton1Click:Connect(function()
+		if not state.entry or not state.track then
+			setStatus("Pick an animation first.", true)
+			return
+		end
+		state.markerIndex = Reactions.addMarker(
+			state.entry.id,
+			state.track.TimePosition,
+			state.action,
+			state.action == "Block" and state.hold or nil
+		)
+	end)
+
+	local editRow = row(markers, UDim2.fromOffset(0, 75))
+	local move = button(editRow, "Move here", UDim2.new(0.5, -2, 0, 20))
+	move.MouseButton1Click:Connect(function()
+		if state.track then
+			editSelected({ t = state.track.TimePosition })
+		end
+	end)
+	local delete = button(editRow, "Delete", UDim2.new(0.5, -2, 0, 20))
+	delete.MouseButton1Click:Connect(function()
+		if state.entry and state.markerIndex then
+			Reactions.removeMarker(state.entry.id, state.markerIndex)
+			state.markerIndex = nil
+		end
+	end)
+
+	ui.markerList = scrollList(markers, UDim2.fromOffset(0, 102), UDim2.new(1, 0, 1, -146))
+	ui.markerRows = {}
+
+	ui.markerInfo = label({
+		Size = UDim2.new(1, 0, 0, 16),
+		Position = UDim2.new(0, 0, 1, -40),
+		Text = "",
+		TextSize = 12,
+		ColorKey = "DisabledTextColor",
+		Parent = markers,
+	})
+
+	local clear, clearLabel = button(markers, "Clear markers", UDim2.new(1, 0, 0, 20))
+	clear.Position = UDim2.new(0, 0, 1, -20)
+	clear.MouseButton1Click:Connect(function()
+		if not state.entry then
+			return
+		end
+		if os.clock() - state.confirmClear < 2 then
+			state.confirmClear = 0
+			clearLabel.Text = "Clear markers"
+			Reactions.clear(state.entry.id)
+			state.markerIndex = nil
+		else
+			state.confirmClear = os.clock()
+			clearLabel.Text = "Click again to clear"
+			task.delay(2, function()
+				if os.clock() - state.confirmClear >= 2 then
+					clearLabel.Text = "Clear markers"
+				end
+			end)
+		end
+	end)
 
 	uiMaid:Connect(Reactions.Changed, function(id)
-		if state.entry and (id == nil or id == state.entry.id) then
-			updateReaction()
+		if id == nil or (state.entry and id == state.entry.id) then
+			state.markersDirty = true
 		end
+		state.listDirty = true
 	end)
 
-	ui.status = new("TextLabel", {
-		Size = UDim2.new(1, -16, 0, 20),
-		Position = UDim2.new(0, 8, 1, -24),
-		BackgroundTransparency = 1,
-		Text = "",
-		TextColor3 = Color3.fromRGB(250, 160, 120),
-		Font = Enum.Font.Gotham,
-		TextSize = 11,
-		TextWrapped = true,
-		TextXAlignment = Enum.TextXAlignment.Left,
-		Parent = content,
-	})
-
 	local grip = new("TextButton", {
-		Size = UDim2.fromOffset(18, 18),
-		Position = UDim2.new(1, -18, 1, -18),
+		Size = UDim2.fromOffset(16, 16),
+		Position = UDim2.new(1, -16, 1, -16),
 		BackgroundTransparency = 1,
 		Text = "◢",
-		TextColor3 = THEME.sub,
 		TextSize = 14,
-		Font = Enum.Font.GothamBold,
+		Font = font(),
 		ZIndex = 10,
-		Parent = main,
+		Parent = outer,
 	})
+	theme(grip, { TextColor3 = "OutlineColor" })
 	do
 		local resizing, startMouse, startSize
 		grip.InputBegan:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
-				resizing, startMouse, startSize = true, input.Position, main.AbsoluteSize
+			if pressed(input) then
+				resizing, startMouse, startSize = true, input.Position, outer.AbsoluteSize
 			end
 		end)
-		uiMaid:Give(UserInputService.InputChanged:Connect(function(input)
-			if
-				resizing
-				and (
-					input.UserInputType == Enum.UserInputType.MouseMovement
-					or input.UserInputType == Enum.UserInputType.Touch
-				)
-			then
+		uiMaid:Connect(UserInputService.InputChanged, function(input)
+			if resizing and moved(input) then
 				local d = input.Position - startMouse
-				main.Size = UDim2.fromOffset(
+				outer.Size = UDim2.fromOffset(
 					math.clamp(startSize.X + d.X, MIN_SIZE.X, MAX_SIZE.X),
 					math.clamp(startSize.Y + d.Y, MIN_SIZE.Y, MAX_SIZE.Y)
 				)
 			end
-		end))
-		uiMaid:Give(UserInputService.InputEnded:Connect(function(input)
-			if
-				input.UserInputType == Enum.UserInputType.MouseButton1
-				or input.UserInputType == Enum.UserInputType.Touch
-			then
+		end)
+		uiMaid:Connect(UserInputService.InputEnded, function(input)
+			if pressed(input) then
 				resizing = false
 			end
-		end))
+		end)
 	end
 
+	state.themeKey = themeKey()
+	updateMarkerControls()
 	gui.Parent = (gethui and gethui()) or Services.CoreGui
 end
 
@@ -988,9 +1320,7 @@ local function setCameraBlocked(blocked)
 	if blocked then
 		ContextActionService:BindActionAtPriority(
 			BLOCK_CAMERA_ACTION,
-			function()
-				return Enum.ContextActionResult.Sink
-			end,
+			sink,
 			false,
 			Enum.ContextActionPriority.High.Value + 1,
 			Enum.UserInputType.MouseWheel,
@@ -1011,8 +1341,24 @@ end
 local function step()
 	setCameraBlocked(gui.Enabled and (state.orbiting or state.scrubbing or mouseOverWindow()))
 
-	if state.listDirty and os.clock() - state.lastListRefresh > 0.3 then
+	local now = os.clock()
+	if now - state.lastThemeCheck > 0.5 then
+		state.lastThemeCheck = now
+		local key = themeKey()
+		if key ~= state.themeKey then
+			state.themeKey = key
+			applyTheme()
+			updateMarkerControls()
+			state.listDirty = true
+			state.markersDirty = true
+		end
+	end
+
+	if state.listDirty and now - state.lastListRefresh > 0.3 then
 		refreshList()
+	end
+	if state.markersDirty then
+		refreshMarkers()
 	end
 
 	local cam = ui.camera
@@ -1023,19 +1369,21 @@ local function step()
 		* CFrame.new(0, 0, state.zoom)
 
 	local track = state.track
-	local r = state.entry and Reactions.get(state.entry.id)
-	if r and r.hit and track and track.Length > 0 then
-		ui.hitMarker.Visible = true
-		ui.hitMarker.Position = UDim2.fromScale(math.clamp(r.hit / track.Length, 0, 1), 0.5)
-	else
-		ui.hitMarker.Visible = false
-	end
+	local length = track and track.Length or 0
+	local position = 0
 	if state.finished then
-		ui.progress.Size = UDim2.fromScale(1, 1)
-	elseif track and track.Length > 0 then
-		ui.progress.Size = UDim2.fromScale(math.clamp(track.TimePosition / track.Length, 0, 1), 1)
-	else
-		ui.progress.Size = UDim2.fromScale(0, 1)
+		position = length
+	elseif track and length > 0 then
+		position = math.clamp(track.TimePosition, 0, length)
+	end
+	ui.progress.Size = UDim2.fromScale(length > 0 and position / length or 0, 1)
+	ui.time.Text = string.format("%.2fs / %.2fs", position, length)
+end
+
+function PreviewWindow.setLibrary(lib)
+	library = lib
+	if gui then
+		applyTheme()
 	end
 end
 
@@ -1052,24 +1400,26 @@ function PreviewWindow.open()
 	end
 	gui.Enabled = true
 	state.listDirty = true
+	state.markersDirty = true
 
 	if not state.entry then
 		ui.title.Text = "Preview"
 		setStatus("Pick an animation from the list.")
 	end
-	updateReaction()
 end
 
 function PreviewWindow.show(entry)
+	if not state.entry or state.entry.id ~= entry.id then
+		state.markerIndex = nil
+	end
 	state.entry = entry
 	PreviewWindow.open()
 
-	ui.title.Text = string.format("%s  [%s]", entry.name, entry.id)
-	gui.Enabled = true
+	ui.title.Text = string.format("Preview  •  %s  [%s]", entry.name, entry.id)
 	state.playing = true
 
 	rebuildRig()
-	updateReaction()
+	state.markersDirty = true
 end
 
 function PreviewWindow.close()
@@ -1078,6 +1428,7 @@ function PreviewWindow.close()
 	end
 	gui.Enabled = false
 	state.entry = nil
+	state.markerIndex = nil
 	state.scrubbing = false
 	state.orbiting = false
 	setCameraBlocked(false)
@@ -1096,15 +1447,12 @@ function PreviewWindow.destroy()
 	PreviewWindow.close()
 	uiMaid:Clean()
 
-	if state.render then
-		state.render:Disconnect()
-		state.render = nil
-	end
-
 	if gui then
 		gui:Destroy()
 		gui = nil
 	end
+	table.clear(themed)
+	table.clear(ui)
 end
 
 return PreviewWindow
@@ -1480,6 +1828,7 @@ end
 
 function AnimationLogger.build(Tab, ctx)
 	local Library, maid, notify = ctx.Library, ctx.maid, ctx.notify
+	PreviewWindow.setLibrary(Library)
 
 	local state = {
 		search = "",
@@ -1553,7 +1902,8 @@ function AnimationLogger.build(Tab, ctx)
 
 	local Log = Tab:AddRightGroupbox("Animations")
 
-	local summary = Log:AddLabel("0 logged", true)
+	local summary = Log:AddLabel("0 logged")
+	local status = Log:AddLabel("Listening for animations...")
 
 	local dropdown = Log:AddDropdown("AnimList", {
 		Text = "Logged animations",
@@ -1589,36 +1939,47 @@ function AnimationLogger.build(Tab, ctx)
 		return values
 	end)
 
-	local details = Log:AddLabel("Nothing selected.", true)
+	local details = {
+		Log:AddLabel("Nothing selected."),
+		Log:AddLabel(""),
+		Log:AddLabel(""),
+		Log:AddLabel(""),
+	}
 
 	local lastSummary, lastDetails
 	local function updateSummary()
-		local text = string.format(
-			"%d logged  •  %d shown\n%s",
-			Logger.count,
-			#currentList(),
-			Logger.paused and "Logging is paused." or "Listening for animations..."
-		)
-		if text ~= lastSummary then
-			lastSummary = text
-			summary:SetText(text)
+		local counts = string.format("%d logged  •  %d shown", Logger.count, #currentList())
+		local text = Logger.paused and "Logging is paused." or "Listening for animations..."
+		if counts .. text ~= lastSummary then
+			lastSummary = counts .. text
+			summary:SetText(counts)
+			status:SetText(text)
 		end
+	end
+
+	local function short(text, max)
+		if #text > max then
+			return text:sub(1, max - 3) .. "..."
+		end
+		return text
 	end
 
 	local function updateDetails()
 		local e = selected()
-		local text = e
-				and string.format(
-					"%s\nID: rbxassetid://%s\nPlayed by: %s\nTimes played: %d",
-					e.name,
-					e.id,
-					table.concat(e.ownerList, ", "),
-					e.plays
-				)
-			or "Nothing selected."
+		local lines = e
+				and {
+					short(e.name, 34),
+					"ID: " .. e.id,
+					short("Played by: " .. table.concat(e.ownerList, ", "), 34),
+					"Times played: " .. e.plays,
+				}
+			or { "Nothing selected.", "", "", "" }
+		local text = table.concat(lines, "\n")
 		if text ~= lastDetails then
 			lastDetails = text
-			details:SetText(text)
+			for i, line in ipairs(lines) do
+				details[i]:SetText(line)
+			end
 		end
 	end
 
@@ -1850,7 +2211,7 @@ local function release(code)
 	end
 end
 
-function Engine.send(action)
+function Engine.send(action, hold)
 	local code = keyCode(Engine.settings.keys[action] or "")
 	if not code then
 		return false
@@ -1865,7 +2226,7 @@ function Engine.send(action)
 	if action == "Block" then
 		held[code] = (held[code] or 0) + 1
 		pcall(press, code)
-		task.delay(Engine.settings.blockHold, function()
+		task.delay(hold or Engine.settings.blockHold, function()
 			held[code] -= 1
 			if held[code] <= 0 then
 				held[code] = nil
@@ -1963,26 +2324,32 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 	local r = Reactions.get(id)
-	if not r or not r.action or not r.hit or (r.learned and not s.useLearned) then
+	if not r or #r.markers == 0 or (r.learned and not s.useLearned) then
 		return
 	end
 
-	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead - Engine.pingOffset())
-	local thread
-	thread = task.delay(wait, function()
-		maid:Remove(thread, true)
-		if not Engine.settings.enabled then
-			return
-		end
-		if not track.IsPlaying and wait > 0.05 then
-			return
-		end
-		if distanceTo(model) > Engine.settings.range then
-			return
-		end
-		Engine.send(r.action)
-	end)
-	maid:Give(thread)
+	local speed = trackSpeed(track)
+	local early = s.lead + Engine.pingOffset()
+	for _, marker in ipairs(r.markers) do
+		local wait = math.max(0, marker.t / speed - early)
+		local action = marker.action
+		local hold = marker.hold and marker.hold / speed or nil
+		local thread
+		thread = task.delay(wait, function()
+			maid:Remove(thread, true)
+			if not Engine.settings.enabled then
+				return
+			end
+			if not track.IsPlaying and wait > 0.05 then
+				return
+			end
+			if distanceTo(model) > Engine.settings.range then
+				return
+			end
+			Engine.send(action, hold)
+		end)
+		maid:Give(thread)
+	end
 end
 
 local function onDamaged()
@@ -2097,6 +2464,29 @@ end
 
 Reactions.cleanId = cleanId
 
+local function sortMarkers(r)
+	table.sort(r.markers, function(a, b)
+		return a.t < b.t
+	end)
+end
+
+local function migrate(r)
+	r.samples = r.samples or {}
+	r.markers = r.markers or {}
+	if #r.markers == 0 and r.action and r.hit then
+		table.insert(r.markers, { t = r.hit, action = r.action })
+	end
+	r.action, r.hit, r.manualHit = nil, nil, nil
+	for _, m in ipairs(r.markers) do
+		m.t = tonumber(m.t) or 0
+		if m.action ~= "Block" then
+			m.hold = nil
+		end
+	end
+	sortMarkers(r)
+	return r
+end
+
 function Reactions.load()
 	table.clear(Reactions.data)
 	if not (readfile and isfile) then
@@ -2112,8 +2502,7 @@ function Reactions.load()
 	if decoded and type(data) == "table" then
 		for id, r in pairs(data) do
 			if type(r) == "table" then
-				r.samples = r.samples or {}
-				Reactions.data[tostring(id)] = r
+				Reactions.data[tostring(id)] = migrate(r)
 			end
 		end
 	end
@@ -2139,41 +2528,74 @@ function Reactions.save()
 	end)
 end
 
+local function changed(id)
+	Reactions.Changed:Fire(id)
+	Reactions.save()
+end
+
 function Reactions.get(id)
 	return Reactions.data[cleanId(id) or ""]
+end
+
+function Reactions.markers(id)
+	local r = Reactions.get(id)
+	return r and r.markers or {}
+end
+
+function Reactions.has(id)
+	return #Reactions.markers(id) > 0
 end
 
 local function ensure(id)
 	local r = Reactions.data[id]
 	if not r then
-		r = { samples = {} }
+		r = { samples = {}, markers = {} }
 		Reactions.data[id] = r
 	end
 	return r
 end
 
-function Reactions.setAction(id, action)
+function Reactions.addMarker(id, t, action, hold)
 	id = cleanId(id)
 	if not id then
 		return
 	end
 	local r = ensure(id)
-	r.action = action
 	r.learned = false
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	local marker = { t = math.max(0, t), action = action, hold = action == "Block" and hold or nil }
+	table.insert(r.markers, marker)
+	sortMarkers(r)
+	changed(id)
+	return table.find(r.markers, marker)
 end
 
-function Reactions.setHit(id, hit)
+function Reactions.updateMarker(id, index, fields)
 	id = cleanId(id)
-	if not id then
-		return
+	local r = id and Reactions.data[id]
+	local marker = r and r.markers[index]
+	if not marker then
+		return index
 	end
-	local r = ensure(id)
-	r.hit = math.max(0, hit)
-	r.manualHit = true
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	for k, v in pairs(fields) do
+		marker[k] = v
+	end
+	marker.t = math.max(0, marker.t)
+	if marker.action ~= "Block" then
+		marker.hold = nil
+	end
+	r.learned = false
+	sortMarkers(r)
+	changed(id)
+	return table.find(r.markers, marker)
+end
+
+function Reactions.removeMarker(id, index)
+	id = cleanId(id)
+	local r = id and Reactions.data[id]
+	if r and r.markers[index] then
+		table.remove(r.markers, index)
+		changed(id)
+	end
 end
 
 function Reactions.addSample(id, hit, defaultAction)
@@ -2188,17 +2610,14 @@ function Reactions.addSample(id, hit, defaultAction)
 		table.remove(samples, 1)
 	end
 
-	if not r.manualHit then
+	if r.learned or #r.markers == 0 then
 		local sorted = table.clone(samples)
 		table.sort(sorted)
-		r.hit = sorted[math.ceil(#sorted / 2)]
-	end
-	if not r.action then
-		r.action = defaultAction
+		local action = r.markers[1] and r.markers[1].action or defaultAction
+		r.markers = { { t = sorted[math.ceil(#sorted / 2)], action = action } }
 		r.learned = true
 	end
-	Reactions.Changed:Fire(id)
-	Reactions.save()
+	changed(id)
 	return r
 end
 
@@ -2206,33 +2625,40 @@ function Reactions.clear(id)
 	id = cleanId(id)
 	if id and Reactions.data[id] then
 		Reactions.data[id] = nil
-		Reactions.Changed:Fire(id)
-		Reactions.save()
+		changed(id)
 	end
 end
 
 function Reactions.clearAll()
 	table.clear(Reactions.data)
-	Reactions.Changed:Fire()
-	Reactions.save()
+	changed(nil)
 end
 
-function Reactions.count()
-	local n = 0
-	for _ in pairs(Reactions.data) do
-		n += 1
+function Reactions.describeMarker(m)
+	if m.action == "Block" and m.hold then
+		return string.format("%s %.2fs (hold %.2fs)", m.action, m.t, m.hold)
 	end
-	return n
+	return string.format("%s %.2fs", m.action, m.t)
 end
 
 function Reactions.describe(id)
 	local r = Reactions.get(id)
-	if not r or not r.action then
+	if not r or #r.markers == 0 then
 		return "No reaction set"
 	end
-	local hit = r.hit and string.format("%.2fs", r.hit) or "no hit time"
-	local extra = #r.samples > 0 and string.format(", %d sample(s)", #r.samples) or ""
-	return string.format("%s at %s%s%s", r.action, hit, extra, r.learned and " (learned)" or "")
+	local parts = {}
+	for i, m in ipairs(r.markers) do
+		if i > 3 then
+			table.insert(parts, string.format("+%d more", #r.markers - 3))
+			break
+		end
+		table.insert(parts, Reactions.describeMarker(m))
+	end
+	local text = table.concat(parts, ", ")
+	if r.learned then
+		text ..= string.format(" (learned, %d sample(s))", #r.samples)
+	end
+	return text
 end
 
 return Reactions
@@ -2263,13 +2689,9 @@ function AutoReact.build(Tab, ctx)
 
 	local Main = Tab:AddLeftGroupbox("Auto react")
 
-	Main:AddLabel(
-		"When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning.",
-		true
-	)
-
 	Main:AddToggle("ReactEnabled", {
 		Text = "Enabled",
+		Tooltip = "Presses the key at the hit time when someone near you plays a reaction animation. Set reactions in the preview window or turn on learning",
 		Default = false,
 		Risky = true,
 		Callback = function(value)
@@ -2324,7 +2746,8 @@ function AutoReact.build(Tab, ctx)
 
 	local Ping = Tab:AddLeftGroupbox("Ping")
 
-	local pingInfo = Ping:AddLabel("Ping: ...", true)
+	local pingInfo = Ping:AddLabel("Ping: ...")
+	local earlyInfo = Ping:AddLabel("Pressing early: ...")
 
 	Ping:AddDropdown("ReactPingMode", {
 		Text = "Ping adjustment",
@@ -2413,13 +2836,9 @@ function AutoReact.build(Tab, ctx)
 
 	local Learn = Tab:AddRightGroupbox("Learn from damage")
 
-	Learn:AddLabel(
-		"When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable.",
-		true
-	)
-
 	Learn:AddToggle("ReactLearn", {
 		Text = "Learn from damage",
+		Tooltip = "When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable",
 		Default = false,
 		Callback = function(value)
 			settings.learn = value
@@ -2458,12 +2877,12 @@ function AutoReact.build(Tab, ctx)
 
 	local Saved = Tab:AddRightGroupbox("Saved reactions")
 
-	local summary = Saved:AddLabel("0 saved for this game", true)
+	local summary = Saved:AddLabel("0 saved for this game")
 
 	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
-			if r.action or r.hit then
+			if #r.markers > 0 then
 				table.insert(ids, id)
 			end
 		end
@@ -2554,16 +2973,18 @@ function AutoReact.build(Tab, ctx)
 			end
 			pcall(function()
 				local offset = Engine.pingOffset()
-				local text = string.format(
-					"Ping: %d ms\nPressing %d ms early (%d ping + %d press early)",
-					math.floor(Engine.ping() * 1000 + 0.5),
+				local ping = string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5))
+				local early = string.format(
+					"Pressing %d ms early (%d + %d)",
 					math.floor((offset + settings.lead) * 1000 + 0.5),
 					math.floor(offset * 1000 + 0.5),
 					math.floor(settings.lead * 1000 + 0.5)
 				)
+				local text = ping .. early
 				if text ~= lastPing then
 					lastPing = text
-					pingInfo:SetText(text)
+					pingInfo:SetText(ping)
+					earlyInfo:SetText(early)
 				end
 			end)
 			task.wait(0.5)
@@ -2600,17 +3021,14 @@ function HomeTab.build(Window, features)
 	end
 
 	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
-	Info:AddLabel(
-		string.format("Executor: %s\nPlace: %d\nToggle UI: %s", executor, game.PlaceId, Config.ToggleKey.Name),
-		true
-	)
+	Info:AddLabel("Executor: " .. executor)
+	Info:AddLabel("Place: " .. game.PlaceId)
+	Info:AddLabel("Toggle UI: " .. Config.ToggleKey.Name)
 
-	local names = {}
-	for _, feature in ipairs(features) do
-		table.insert(names, "• " .. feature.Title)
-	end
 	local List = Tab:AddRightGroupbox("Features")
-	List:AddLabel(table.concat(names, "\n"), true)
+	for _, feature in ipairs(features) do
+		List:AddLabel("• " .. feature.Title)
+	end
 
 	return Tab
 end

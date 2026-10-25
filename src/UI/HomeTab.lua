@@ -14,17 +14,14 @@ function HomeTab.build(Window, features)
 	end
 
 	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
-	Info:AddLabel(
-		string.format("Executor: %s\nPlace: %d\nToggle UI: %s", executor, game.PlaceId, Config.ToggleKey.Name),
-		true
-	)
+	Info:AddLabel("Executor: " .. executor)
+	Info:AddLabel("Place: " .. game.PlaceId)
+	Info:AddLabel("Toggle UI: " .. Config.ToggleKey.Name)
 
-	local names = {}
-	for _, feature in ipairs(features) do
-		table.insert(names, "• " .. feature.Title)
-	end
 	local List = Tab:AddRightGroupbox("Features")
-	List:AddLabel(table.concat(names, "\n"), true)
+	for _, feature in ipairs(features) do
+		List:AddLabel("• " .. feature.Title)
+	end
 
 	return Tab
 end

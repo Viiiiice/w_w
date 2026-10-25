@@ -22,6 +22,7 @@ end
 
 function AnimationLogger.build(Tab, ctx)
 	local Library, maid, notify = ctx.Library, ctx.maid, ctx.notify
+	PreviewWindow.setLibrary(Library)
 
 	local state = {
 		search = "",
@@ -95,7 +96,8 @@ function AnimationLogger.build(Tab, ctx)
 
 	local Log = Tab:AddRightGroupbox("Animations")
 
-	local summary = Log:AddLabel("0 logged", true)
+	local summary = Log:AddLabel("0 logged")
+	local status = Log:AddLabel("Listening for animations...")
 
 	local dropdown = Log:AddDropdown("AnimList", {
 		Text = "Logged animations",
@@ -131,36 +133,47 @@ function AnimationLogger.build(Tab, ctx)
 		return values
 	end)
 
-	local details = Log:AddLabel("Nothing selected.", true)
+	local details = {
+		Log:AddLabel("Nothing selected."),
+		Log:AddLabel(""),
+		Log:AddLabel(""),
+		Log:AddLabel(""),
+	}
 
 	local lastSummary, lastDetails
 	local function updateSummary()
-		local text = string.format(
-			"%d logged  •  %d shown\n%s",
-			Logger.count,
-			#currentList(),
-			Logger.paused and "Logging is paused." or "Listening for animations..."
-		)
-		if text ~= lastSummary then
-			lastSummary = text
-			summary:SetText(text)
+		local counts = string.format("%d logged  •  %d shown", Logger.count, #currentList())
+		local text = Logger.paused and "Logging is paused." or "Listening for animations..."
+		if counts .. text ~= lastSummary then
+			lastSummary = counts .. text
+			summary:SetText(counts)
+			status:SetText(text)
 		end
+	end
+
+	local function short(text, max)
+		if #text > max then
+			return text:sub(1, max - 3) .. "..."
+		end
+		return text
 	end
 
 	local function updateDetails()
 		local e = selected()
-		local text = e
-				and string.format(
-					"%s\nID: rbxassetid://%s\nPlayed by: %s\nTimes played: %d",
-					e.name,
-					e.id,
-					table.concat(e.ownerList, ", "),
-					e.plays
-				)
-			or "Nothing selected."
+		local lines = e
+				and {
+					short(e.name, 34),
+					"ID: " .. e.id,
+					short("Played by: " .. table.concat(e.ownerList, ", "), 34),
+					"Times played: " .. e.plays,
+				}
+			or { "Nothing selected.", "", "", "" }
+		local text = table.concat(lines, "\n")
 		if text ~= lastDetails then
 			lastDetails = text
-			details:SetText(text)
+			for i, line in ipairs(lines) do
+				details[i]:SetText(line)
+			end
 		end
 	end
 
