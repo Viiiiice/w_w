@@ -737,9 +737,9 @@ local function refreshMarkers()
 		r.index = i
 		r.button.LayoutOrder = i
 		r.button.Visible = true
-		local hold = m.action == "Block" and m.hold and string.format("  hold %.2f", m.hold) or ""
+		local hold = m.action == "Block" and m.hold and string.format(" hold %.2fs", m.hold) or ""
 		r.text.Text = string.format(
-			'%d  <font color="#%s">%s</font>  %.2fs%s',
+			'%d. <font color="#%s">%s</font> %.2fs%s',
 			i,
 			markerColor(m.action):ToHex(),
 			m.action,
@@ -1415,7 +1415,7 @@ function PreviewWindow.show(entry)
 	state.entry = entry
 	PreviewWindow.open()
 
-	ui.title.Text = string.format("Preview  •  %s  [%s]", entry.name, entry.id)
+	ui.title.Text = string.format("Preview - %s [%s]", entry.name, entry.id)
 	state.playing = true
 
 	rebuildRig()
@@ -1823,7 +1823,7 @@ local AnimationLogger = {
 }
 
 local function label(entry)
-	return string.format("%s  [%s]", entry.name, entry.id)
+	return string.format("%s [%s]", entry.name, entry.id)
 end
 
 function AnimationLogger.build(Tab, ctx)
@@ -1948,7 +1948,7 @@ function AnimationLogger.build(Tab, ctx)
 
 	local lastSummary, lastDetails
 	local function updateSummary()
-		local counts = string.format("%d logged  •  %d shown", Logger.count, #currentList())
+		local counts = string.format("%d logged, %d shown", Logger.count, #currentList())
 		local text = Logger.paused and "Logging is paused." or "Listening for animations..."
 		if counts .. text ~= lastSummary then
 			lastSummary = counts .. text
@@ -3020,7 +3020,7 @@ function HomeTab.build(Window, features)
 		end
 	end
 
-	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
+	local Info = Tab:AddLeftGroupbox(Config.Title .. " v" .. Config.Version)
 	Info:AddLabel("Executor: " .. executor)
 	Info:AddLabel("Place: " .. game.PlaceId)
 	Info:AddLabel("Toggle UI: " .. Config.ToggleKey.Name)
@@ -3398,7 +3398,7 @@ local maid = Maid.new()
 Library.ShowCustomCursor = false
 
 local Window = Library:CreateWindow({
-	Title = Config.Title .. "  v" .. Config.Version,
+	Title = Config.Title .. " v" .. Config.Version,
 	Center = true,
 	AutoShow = true,
 	Resizable = true,

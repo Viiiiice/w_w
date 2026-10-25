@@ -17,7 +17,7 @@ local AnimationLogger = {
 }
 
 local function label(entry)
-	return string.format("%s  [%s]", entry.name, entry.id)
+	return string.format("%s [%s]", entry.name, entry.id)
 end
 
 function AnimationLogger.build(Tab, ctx)
@@ -142,7 +142,7 @@ function AnimationLogger.build(Tab, ctx)
 
 	local lastSummary, lastDetails
 	local function updateSummary()
-		local counts = string.format("%d logged  •  %d shown", Logger.count, #currentList())
+		local counts = string.format("%d logged, %d shown", Logger.count, #currentList())
 		local text = Logger.paused and "Logging is paused." or "Listening for animations..."
 		if counts .. text ~= lastSummary then
 			lastSummary = counts .. text

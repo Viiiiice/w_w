@@ -16,7 +16,7 @@ local maid = Maid.new()
 Library.ShowCustomCursor = false
 
 local Window = Library:CreateWindow({
-	Title = Config.Title .. "  v" .. Config.Version,
+	Title = Config.Title .. " v" .. Config.Version,
 	Center = true,
 	AutoShow = true,
 	Resizable = true,

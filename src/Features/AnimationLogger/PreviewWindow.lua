@@ -485,9 +485,9 @@ local function refreshMarkers()
 		r.index = i
 		r.button.LayoutOrder = i
 		r.button.Visible = true
-		local hold = m.action == "Block" and m.hold and string.format("  hold %.2f", m.hold) or ""
+		local hold = m.action == "Block" and m.hold and string.format(" hold %.2fs", m.hold) or ""
 		r.text.Text = string.format(
-			'%d  <font color="#%s">%s</font>  %.2fs%s',
+			'%d. <font color="#%s">%s</font> %.2fs%s',
 			i,
 			markerColor(m.action):ToHex(),
 			m.action,
@@ -1163,7 +1163,7 @@ function PreviewWindow.show(entry)
 	state.entry = entry
 	PreviewWindow.open()
 
-	ui.title.Text = string.format("Preview  •  %s  [%s]", entry.name, entry.id)
+	ui.title.Text = string.format("Preview - %s [%s]", entry.name, entry.id)
 	state.playing = true
 
 	rebuildRig()

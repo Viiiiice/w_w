@@ -13,7 +13,7 @@ function HomeTab.build(Window, features)
 		end
 	end
 
-	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
+	local Info = Tab:AddLeftGroupbox(Config.Title .. " v" .. Config.Version)
 	Info:AddLabel("Executor: " .. executor)
 	Info:AddLabel("Place: " .. game.PlaceId)
 	Info:AddLabel("Toggle UI: " .. Config.ToggleKey.Name)
