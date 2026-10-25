@@ -254,7 +254,7 @@ local function build()
 	gui = new("ScreenGui", {
 		Name = "w_wPreview",
 		ResetOnSpawn = false,
-		DisplayOrder = 100,
+		DisplayOrder = 1000,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		IgnoreGuiInset = true,
 		Enabled = false,

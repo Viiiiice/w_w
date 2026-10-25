@@ -1,11 +1,11 @@
 local Logger = require("Features/AnimationLogger/Logger")
+local LazyDropdown = require("Util/LazyDropdown")
 local PreviewWindow = require("Features/AnimationLogger/PreviewWindow")
 local Reactions = require("Features/AutoReact/Reactions")
 local Engine = require("Features/AutoReact/Engine")
 
 local AutoReact = {
 	Title = "Auto react",
-	Icon = "shield",
 	IgnoreOptions = { "ReactSaved" },
 }
 
@@ -16,195 +16,210 @@ local function labelFor(id)
 end
 
 function AutoReact.build(Tab, ctx)
-	local Window, Fluent, maid = ctx.Window, ctx.Fluent, ctx.maid
-	local Options = Fluent.Options
+	local Library, maid, notify = ctx.Library, ctx.maid, ctx.notify
 	local settings = Engine.settings
-	local state = { labelToId = {}, selectedId = nil, dirty = true, notifyLearn = true }
+	local state = { labelToId = {}, selectedId = nil, summaryDirty = true, notifyLearn = true }
 
-	local function notify(title, content)
-		Fluent:Notify({ Title = title, Content = content, Duration = 3 })
-	end
+	local Main = Tab:AddLeftGroupbox("Auto react")
 
-	local Main = Tab:AddSection("Auto react")
+	Main:AddLabel(
+		"When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning.",
+		true
+	)
 
-	Main:AddParagraph({
-		Title = "How it works",
-		Content = "When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning below.",
+	Main:AddToggle("ReactEnabled", {
+		Text = "Enabled",
+		Default = false,
+		Risky = true,
+		Callback = function(value)
+			settings.enabled = value
+		end,
 	})
 
-	Main:AddToggle("ReactEnabled", { Title = "Enabled", Default = false })
-	Options.ReactEnabled:OnChanged(function(value)
-		settings.enabled = value
-	end)
-
-	Main:AddToggle("ReactUseLearned", { Title = "React to learned animations", Default = true })
-	Options.ReactUseLearned:OnChanged(function(value)
-		settings.useLearned = value
-	end)
+	Main:AddToggle("ReactUseLearned", {
+		Text = "React to learned animations",
+		Default = true,
+		Callback = function(value)
+			settings.useLearned = value
+		end,
+	})
 
 	Main:AddSlider("ReactRange", {
-		Title = "Range (studs)",
+		Text = "Range",
+		Suffix = " studs",
 		Default = settings.range,
 		Min = 4,
 		Max = 80,
 		Rounding = 0,
+		Callback = function(value)
+			settings.range = value
+		end,
 	})
-	Options.ReactRange:OnChanged(function(value)
-		settings.range = value
-	end)
 
 	Main:AddSlider("ReactLead", {
-		Title = "Press early (ms)",
-		Description = "Raise this if you're still getting hit",
+		Text = "Press early",
+		Suffix = " ms",
+		Tooltip = "Raise this if you're still getting hit",
 		Default = math.floor(settings.lead * 1000),
 		Min = 0,
 		Max = 400,
 		Rounding = 0,
+		Callback = function(value)
+			settings.lead = value / 1000
+		end,
 	})
-	Options.ReactLead:OnChanged(function(value)
-		settings.lead = value / 1000
-	end)
 
 	Main:AddSlider("ReactBlockHold", {
-		Title = "Block hold time (s)",
+		Text = "Block hold time",
+		Suffix = " s",
 		Default = settings.blockHold,
 		Min = 0.1,
 		Max = 3,
 		Rounding = 2,
+		Callback = function(value)
+			settings.blockHold = value
+		end,
 	})
-	Options.ReactBlockHold:OnChanged(function(value)
-		settings.blockHold = value
-	end)
 
-	local Ping = Tab:AddSection("Ping")
+	local Ping = Tab:AddLeftGroupbox("Ping")
 
-	local pingInfo = Ping:AddParagraph({ Title = "Ping: ...", Content = "" })
+	local pingInfo = Ping:AddLabel("Ping: ...", true)
 
 	Ping:AddDropdown("ReactPingMode", {
-		Title = "Ping adjustment",
-		Description = "Auto reads your ping, Manual uses the value below",
+		Text = "Ping adjustment",
+		Tooltip = "Auto reads your ping, Manual uses the slider below",
 		Values = { "Auto", "Manual", "Off" },
 		Default = settings.pingMode,
+		Callback = function(value)
+			settings.pingMode = value
+		end,
 	})
-	Options.ReactPingMode:OnChanged(function(value)
-		settings.pingMode = value
-	end)
 
 	Ping:AddSlider("ReactPingScale", {
-		Title = "Auto amount (%)",
-		Description = "How much of your ping to press early by. 50% is one-way latency",
+		Text = "Auto amount",
+		Suffix = "%",
+		Tooltip = "How much of your ping to press early by. 50% is one-way latency",
 		Default = math.floor(settings.pingScale * 100),
 		Min = 0,
 		Max = 150,
 		Rounding = 0,
+		Callback = function(value)
+			settings.pingScale = value / 100
+		end,
 	})
-	Options.ReactPingScale:OnChanged(function(value)
-		settings.pingScale = value / 100
-	end)
 
 	Ping:AddSlider("ReactPingManual", {
-		Title = "Manual adjustment (ms)",
+		Text = "Manual adjustment",
+		Suffix = " ms",
 		Default = settings.pingManual,
 		Min = 0,
 		Max = 500,
 		Rounding = 0,
+		Callback = function(value)
+			settings.pingManual = value
+		end,
 	})
-	Options.ReactPingManual:OnChanged(function(value)
-		settings.pingManual = value
-	end)
 
-	local Keys = Tab:AddSection("Keys")
+	local Keys = Tab:AddRightGroupbox("Keys")
 
 	for _, action in ipairs(Reactions.ACTIONS) do
-		local id = "ReactKey" .. action
-		Keys:AddInput(id, {
-			Title = action .. " key",
+		Keys:AddInput("ReactKey" .. action, {
+			Text = action .. " key",
 			Default = settings.keys[action],
 			Placeholder = "F",
 			Numeric = false,
 			Finished = true,
-		})
-		Options[id]:OnChanged(function(value)
-			local ok = pcall(function()
-				return Enum.KeyCode[value]
-			end)
-			if ok and value ~= "" then
-				settings.keys[action] = value
-			end
-		end)
-		Keys:AddButton({
-			Title = "Test " .. action,
-			Description = "Sends the " .. action:lower() .. " input now",
-			Callback = function()
-				if not Engine.send(action) then
-					notify("Couldn't send", "Check the key name (like F, Q, Space, LeftShift)")
+			ClearTextOnFocus = false,
+			Callback = function(value)
+				local ok = pcall(function()
+					return Enum.KeyCode[value]
+				end)
+				if ok and value ~= "" then
+					settings.keys[action] = value
 				end
 			end,
 		})
 	end
 
+	Keys:AddButton({
+		Text = "Test Parry",
+		Func = function()
+			Engine.send("Parry")
+		end,
+	})
+		:AddButton({
+			Text = "Test Block",
+			Func = function()
+				Engine.send("Block")
+			end,
+		})
+	Keys:AddButton({
+		Text = "Test Dash",
+		Func = function()
+			Engine.send("Dash")
+		end,
+	})
+
 	Keys:AddDropdown("ReactInputMethod", {
-		Title = "Input method",
-		Description = "Auto uses keypress when available, otherwise VirtualInputManager",
+		Text = "Input method",
+		Tooltip = "Auto uses keypress when available, otherwise VirtualInputManager",
 		Values = { "Auto", "VirtualInputManager" },
 		Default = "Auto",
-	})
-	Options.ReactInputMethod:OnChanged(function(value)
-		settings.inputMethod = value
-	end)
-
-	local Learn = Tab:AddSection("Learn from damage")
-
-	Learn:AddParagraph({
-		Title = "Learning",
-		Content = "When you take damage, the most recent attack animation from someone in range gets saved with that hit time. Get hit a couple of times by a move to make its timing reliable.",
+		Callback = function(value)
+			settings.inputMethod = value
+		end,
 	})
 
-	Learn:AddToggle("ReactLearn", { Title = "Learn from damage", Default = false })
-	Options.ReactLearn:OnChanged(function(value)
-		settings.learn = value
-	end)
+	local Learn = Tab:AddRightGroupbox("Learn from damage")
+
+	Learn:AddLabel(
+		"When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable.",
+		true
+	)
+
+	Learn:AddToggle("ReactLearn", {
+		Text = "Learn from damage",
+		Default = false,
+		Callback = function(value)
+			settings.learn = value
+		end,
+	})
 
 	Learn:AddDropdown("ReactLearnAction", {
-		Title = "Learned animations use",
+		Text = "Learned animations use",
 		Values = Reactions.ACTIONS,
 		Default = settings.learnAction,
+		Callback = function(value)
+			settings.learnAction = value
+		end,
 	})
-	Options.ReactLearnAction:OnChanged(function(value)
-		settings.learnAction = value
-	end)
 
 	Learn:AddSlider("ReactLearnWindow", {
-		Title = "Max time to hit (s)",
-		Description = "Animations that started longer ago than this are ignored",
+		Text = "Max time to hit",
+		Suffix = " s",
+		Tooltip = "Animations that started longer ago than this are ignored",
 		Default = settings.learnWindow,
 		Min = 0.3,
 		Max = 4,
 		Rounding = 1,
+		Callback = function(value)
+			settings.learnWindow = value
+		end,
 	})
-	Options.ReactLearnWindow:OnChanged(function(value)
-		settings.learnWindow = value
-	end)
 
-	Learn:AddToggle("ReactNotifyLearn", { Title = "Notify when something is learned", Default = true })
-	Options.ReactNotifyLearn:OnChanged(function(value)
-		state.notifyLearn = value
-	end)
-
-	local Saved = Tab:AddSection("Saved reactions")
-
-	local summary = Saved:AddParagraph({ Title = "0 saved", Content = "Saved per game." })
-
-	local dropdown = Saved:AddDropdown("ReactSaved", {
-		Title = "Reactions",
-		Values = {},
-		Multi = false,
+	Learn:AddToggle("ReactNotifyLearn", {
+		Text = "Notify when something is learned",
+		Default = true,
+		Callback = function(value)
+			state.notifyLearn = value
+		end,
 	})
-	Options.ReactSaved:OnChanged(function(value)
-		state.selectedId = value and state.labelToId[value] or nil
-	end)
 
-	local function refresh()
+	local Saved = Tab:AddRightGroupbox("Saved reactions")
+
+	local summary = Saved:AddLabel("0 saved for this game", true)
+
+	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
 			if r.action or r.hit then
@@ -212,16 +227,30 @@ function AutoReact.build(Tab, ctx)
 			end
 		end
 		table.sort(ids)
+		return ids
+	end
+
+	local dropdown = Saved:AddDropdown("ReactSaved", {
+		Text = "Reactions",
+		Values = {},
+		Multi = false,
+		Searchable = true,
+		AllowNull = true,
+		Callback = function(value)
+			state.selectedId = value and state.labelToId[value] or nil
+		end,
+	})
+
+	local list = LazyDropdown.wrap(dropdown, function()
 		local values, labelToId = {}, {}
-		for _, id in ipairs(ids) do
+		for _, id in ipairs(savedIds()) do
 			local l = labelFor(id)
 			table.insert(values, l)
 			labelToId[l] = id
 		end
 		state.labelToId = labelToId
-		dropdown:SetValues(values)
-		summary:SetTitle(string.format("%d saved", #ids))
-	end
+		return values
+	end)
 
 	local function withSelected(fn)
 		return function()
@@ -234,8 +263,8 @@ function AutoReact.build(Tab, ctx)
 	end
 
 	Saved:AddButton({
-		Title = "Open in preview",
-		Callback = withSelected(function(id)
+		Text = "Open in preview",
+		Func = withSelected(function(id)
 			local entry = Logger.get(id)
 			if entry then
 				PreviewWindow.show(entry)
@@ -243,36 +272,28 @@ function AutoReact.build(Tab, ctx)
 				notify("Not logged yet", "That animation hasn't played this session.")
 			end
 		end),
-	})
-
-	Saved:AddButton({
-		Title = "Delete selected",
-		Callback = withSelected(function(id)
+	}):AddButton({
+		Text = "Delete",
+		Func = withSelected(function(id)
 			Reactions.clear(id)
 			state.selectedId = nil
 		end),
 	})
 
 	Saved:AddButton({
-		Title = "Delete all",
-		Callback = function()
-			Window:Dialog({
-				Title = "Delete all reactions?",
-				Content = "This removes every saved reaction for this game.",
-				Buttons = {
-					{ Title = "Delete", Callback = Reactions.clearAll },
-					{ Title = "Cancel", Callback = function() end },
-				},
-			})
-		end,
+		Text = "Delete all",
+		Tooltip = "Double click to remove every saved reaction for this game",
+		DoubleClick = true,
+		Func = Reactions.clearAll,
 	})
 
 	maid:Connect(Reactions.Changed, function()
-		state.dirty = true
+		state.summaryDirty = true
+		list.markDirty()
 	end)
 	maid:Connect(Logger.Added, function(entry)
 		if Reactions.get(entry.id) then
-			state.dirty = true
+			list.markDirty()
 		end
 	end)
 	maid:Connect(Engine.Learned, function(id, r)
@@ -281,22 +302,28 @@ function AutoReact.build(Tab, ctx)
 		end
 	end)
 
-	task.spawn(function()
-		while not Fluent.Unloaded do
-			if state.dirty then
-				state.dirty = false
-				pcall(refresh)
+	local lastPing
+	maid:Spawn(function()
+		while not Library.Unloaded do
+			if state.summaryDirty then
+				state.summaryDirty = false
+				pcall(function()
+					summary:SetText(string.format("%d saved for this game", #savedIds()))
+				end)
 			end
 			pcall(function()
-				pingInfo:SetTitle(string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5)))
-				pingInfo:SetDesc(
-					string.format(
-						"Pressing %d ms early (%d ms ping + %d ms press early)",
-						math.floor((Engine.pingOffset() + settings.lead) * 1000 + 0.5),
-						math.floor(Engine.pingOffset() * 1000 + 0.5),
-						math.floor(settings.lead * 1000 + 0.5)
-					)
+				local offset = Engine.pingOffset()
+				local text = string.format(
+					"Ping: %d ms\nPressing %d ms early (%d ping + %d press early)",
+					math.floor(Engine.ping() * 1000 + 0.5),
+					math.floor((offset + settings.lead) * 1000 + 0.5),
+					math.floor(offset * 1000 + 0.5),
+					math.floor(settings.lead * 1000 + 0.5)
 				)
+				if text ~= lastPing then
+					lastPing = text
+					pingInfo:SetText(text)
+				end
 			end)
 			task.wait(0.5)
 		end

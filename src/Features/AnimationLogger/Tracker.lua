@@ -5,6 +5,7 @@ local Signal = require("Util/Signal")
 local Logger = require("Features/AnimationLogger/Logger")
 
 local Players = Services.Players
+local LocalPlayer = Players.LocalPlayer
 
 local Tracker = {
 	Played = Signal.new(),
@@ -101,51 +102,107 @@ local function unhookAll()
 	end
 end
 
-local function watchFolder(folder)
-	if folderMaid then
-		folderMaid:Clean()
-	end
-	unhookAll()
-	folderMaid = Maid.new()
+local function isCharacter(model)
+	return model:IsA("Model")
+		and (
+			Players:GetPlayerFromCharacter(model) ~= nil
+			or model:FindFirstChildOfClass("Humanoid") ~= nil
+			or model:FindFirstChildOfClass("AnimationController") ~= nil
+		)
+end
 
-	folderMaid:Connect(folder.ChildAdded, hookCharacter)
-	folderMaid:Connect(folder.ChildRemoved, unhookCharacter)
-	folderMaid:Connect(folder.AncestryChanged, function()
-		if folder.Parent ~= workspace then
-			folderMaid:Clean()
-			unhookAll()
-		end
-	end)
-
-	for _, model in ipairs(folder:GetChildren()) do
+local function tryHookChild(folder, model)
+	if folder ~= workspace or isCharacter(model) then
 		hookCharacter(model)
 	end
 end
 
+local function watchFolder(folder)
+	if folder == Tracker.current then
+		return
+	end
+	if folderMaid then
+		folderMaid:Clean()
+	end
+	unhookAll()
+	Tracker.current = folder
+	folderMaid = Maid.new()
+	if not folder then
+		return
+	end
+
+	folderMaid:Connect(folder.ChildAdded, function(model)
+		if folder == workspace then
+			task.defer(tryHookChild, folder, model)
+		else
+			hookCharacter(model)
+		end
+	end)
+	folderMaid:Connect(folder.ChildRemoved, unhookCharacter)
+	folderMaid:Connect(folder.AncestryChanged, function()
+		if not folder:IsDescendantOf(game) then
+			watchFolder(nil)
+		end
+	end)
+
+	for _, model in ipairs(folder:GetChildren()) do
+		tryHookChild(folder, model)
+	end
+end
+
+local function findFolder()
+	local name = Config.AnimationLogger.ScanFolder
+	if name and name ~= "" and name ~= "Auto" then
+		return workspace:FindFirstChild(name)
+	end
+	local character = LocalPlayer.Character
+	local parent = character and character.Parent
+	if parent and parent:IsDescendantOf(workspace) or parent == workspace then
+		return parent
+	end
+end
+
 function Tracker.folder()
-	return workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+	return Tracker.current or findFolder()
 end
 
 function Tracker.start(maid)
-	local name = Config.AnimationLogger.ScanFolder
-
-	maid:Give(workspace.ChildAdded:Connect(function(child)
-		if child.Name == name then
-			watchFolder(child)
+	local function update()
+		local folder = findFolder()
+		if folder then
+			watchFolder(folder)
 		end
-	end))
-
-	local folder = Tracker.folder()
-	if folder then
-		watchFolder(folder)
 	end
 
+	local charMaid = maid:Extend()
+	local function onCharacter(character)
+		charMaid:Clean()
+		if character then
+			charMaid:Connect(character.AncestryChanged, function()
+				task.defer(update)
+			end)
+		end
+		task.defer(update)
+	end
+
+	maid:Connect(LocalPlayer.CharacterAdded, onCharacter)
+	maid:Connect(workspace.ChildAdded, function(child)
+		if not Tracker.current then
+			task.defer(update)
+		elseif child.Name == Config.AnimationLogger.ScanFolder then
+			task.defer(update)
+		end
+	end)
+	onCharacter(LocalPlayer.Character)
+	update()
+
 	maid:Give(function()
+		watchFolder(nil)
 		if folderMaid then
 			folderMaid:Clean()
 			folderMaid = nil
 		end
-		unhookAll()
+		Tracker.current = nil
 	end)
 end
 

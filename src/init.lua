@@ -10,56 +10,51 @@ if env.__w_wUnload then
 end
 
 local lib = require("UI/Library")
-local Fluent = lib.Fluent
+local Library = lib.Library
 local maid = Maid.new()
 
-local Window = Fluent:CreateWindow({
-	Title = Config.Title,
-	SubTitle = "v" .. Config.Version,
-	TabWidth = 160,
+Library.ShowCustomCursor = false
+
+local Window = Library:CreateWindow({
+	Title = Config.Title .. "  v" .. Config.Version,
+	Center = true,
+	AutoShow = true,
+	Resizable = true,
 	Size = Config.WindowSize,
-	Acrylic = false,
-	Theme = Config.Theme,
-	MinimizeKey = Config.ToggleKey,
+	ShowCustomCursor = false,
+	UnlockMouseWhileOpen = true,
+	TabPadding = 8,
+	MenuFadeTime = 0.2,
 })
 
-local ctx = { Window = Window, Fluent = Fluent, maid = maid }
+local function notify(title, content, duration)
+	Library:Notify({ Title = title, Description = content or "", Time = duration or 3 })
+end
+
+local ctx = { Window = Window, Library = Library, maid = maid, notify = notify }
 
 HomeTab.build(Window, Features)
 for _, feature in ipairs(Features) do
-	local Tab = Window:AddTab({ Title = feature.Title, Icon = feature.Icon })
+	local Tab = Window:AddTab(feature.Title)
 	local ok, err = pcall(feature.build, Tab, ctx)
 
 	if not ok then
-		Fluent:Notify({ Title = feature.Title .. " failed to load", Content = tostring(err), Duration = 8 })
+		notify(feature.Title .. " failed to load", tostring(err), 8)
 	end
 end
 
 SettingsTab.build(Window, lib, Features)
-Window:SelectTab(1)
 
-local function unload()
+Library:OnUnload(function()
 	maid:Clean()
-	if not Fluent.Unloaded then
-		Fluent:Destroy()
-	end
-
 	env.__w_wUnload = nil
-end
-env.__w_wUnload = unload
-
-task.spawn(function()
-	while not Fluent.Unloaded do
-		task.wait(1)
-	end
-	
-	maid:Clean()
 end)
+env.__w_wUnload = function()
+	if not Library.Unloaded then
+		Library:Unload()
+	end
+end
 
-Fluent:Notify({
-	Title = Config.Title,
-	Content = "Loaded. Press " .. Config.ToggleKey.Name .. " to hide/show.",
-	Duration = 5,
-})
+notify(Config.Title, "Loaded. Press " .. Config.ToggleKey.Name .. " to hide/show.", 5)
 
 lib.SaveManager:LoadAutoloadConfig()

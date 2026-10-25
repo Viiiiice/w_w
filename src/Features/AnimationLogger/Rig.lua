@@ -1,5 +1,5 @@
 local Services = require("Util/Services")
-local Config = require("Config")
+local Tracker = require("Features/AnimationLogger/Tracker")
 
 local Players = Services.Players
 local LocalPlayer = Players.LocalPlayer
@@ -25,7 +25,7 @@ function Rig.findSource(kind, ownerName)
 			return player.Character
 		end
 
-		local folder = workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+		local folder = Tracker.folder()
 		local model = folder and folder:FindFirstChild(ownerName)
 		if model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
 			return model

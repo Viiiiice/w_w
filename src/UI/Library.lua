@@ -5,7 +5,7 @@ local function load(url)
 end
 
 return {
-	Fluent = load(Config.Fluent.Library),
-	SaveManager = load(Config.Fluent.SaveManager),
-	InterfaceManager = load(Config.Fluent.InterfaceManager),
+	Library = load(Config.Linoria.Library),
+	SaveManager = load(Config.Linoria.SaveManager),
+	ThemeManager = load(Config.Linoria.ThemeManager),
 }

@@ -3,7 +3,7 @@ local Config = require("Config")
 local HomeTab = {}
 
 function HomeTab.build(Window, features)
-	local Tab = Window:AddTab({ Title = "Home", Icon = "home" })
+	local Tab = Window:AddTab("Home")
 
 	local executor = "unknown"
 	if identifyexecutor then
@@ -13,21 +13,18 @@ function HomeTab.build(Window, features)
 		end
 	end
 
-	Tab:AddParagraph({
-		Title = Config.Title .. "  v" .. Config.Version,
-		Content = string.format(
-			"Executor: %s\nPlace: %d\nToggle UI: %s",
-			executor,
-			game.PlaceId,
-			Config.ToggleKey.Name
-		),
-	})
+	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
+	Info:AddLabel(
+		string.format("Executor: %s\nPlace: %d\nToggle UI: %s", executor, game.PlaceId, Config.ToggleKey.Name),
+		true
+	)
 
 	local names = {}
 	for _, feature in ipairs(features) do
 		table.insert(names, "• " .. feature.Title)
 	end
-	Tab:AddParagraph({ Title = "Features", Content = table.concat(names, "\n") })
+	local List = Tab:AddRightGroupbox("Features")
+	List:AddLabel(table.concat(names, "\n"), true)
 
 	return Tab
 end

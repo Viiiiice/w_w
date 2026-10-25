@@ -2,22 +2,22 @@ return {
 	Title = "w_w",
 	Version = "0.1.0",
 	ToggleKey = Enum.KeyCode.RightControl,
-	WindowSize = UDim2.fromOffset(600, 480),
+	WindowSize = UDim2.fromOffset(620, 580),
 	Theme = "Dark",
 
 	RootFolder = "w_w",
 	ConfigFolder = "w_w/config",
 
-	Fluent = {
-		Library = "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua",
-		SaveManager = "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua",
-		InterfaceManager = "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua",
+	Linoria = {
+		Library = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/Library.lua",
+		SaveManager = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/addons/SaveManager.lua",
+		ThemeManager = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/addons/ThemeManager.lua",
 	},
 
 	AnimationLogger = {
 		SaveFolder = "w_w/animations",
-		ScanFolder = "Alive",
-		MaxDropdownItems = 200,
+		ScanFolder = "Auto",
+		MaxDropdownItems = 60,
 		RefreshInterval = 0.5,
 	},
 

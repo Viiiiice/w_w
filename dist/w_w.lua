@@ -23,22 +23,22 @@ return {
 	Title = "w_w",
 	Version = "0.1.0",
 	ToggleKey = Enum.KeyCode.RightControl,
-	WindowSize = UDim2.fromOffset(600, 480),
+	WindowSize = UDim2.fromOffset(620, 580),
 	Theme = "Dark",
 
 	RootFolder = "w_w",
 	ConfigFolder = "w_w/config",
 
-	Fluent = {
-		Library = "https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua",
-		SaveManager = "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua",
-		InterfaceManager = "https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua",
+	Linoria = {
+		Library = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/Library.lua",
+		SaveManager = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/addons/SaveManager.lua",
+		ThemeManager = "https://raw.githubusercontent.com/mstudio45/LinoriaLib/main/addons/ThemeManager.lua",
 	},
 
 	AnimationLogger = {
 		SaveFolder = "w_w/animations",
-		ScanFolder = "Alive",
-		MaxDropdownItems = 200,
+		ScanFolder = "Auto",
+		MaxDropdownItems = 60,
 		RefreshInterval = 0.5,
 	},
 
@@ -506,7 +506,7 @@ local function build()
 	gui = new("ScreenGui", {
 		Name = "w_wPreview",
 		ResetOnSpawn = false,
-		DisplayOrder = 100,
+		DisplayOrder = 1000,
 		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
 		IgnoreGuiInset = true,
 		Enabled = false,
@@ -1112,7 +1112,7 @@ end
 
 __modules["Features/AnimationLogger/Rig"] = function()
 local Services = require("Util/Services")
-local Config = require("Config")
+local Tracker = require("Features/AnimationLogger/Tracker")
 
 local Players = Services.Players
 local LocalPlayer = Players.LocalPlayer
@@ -1138,7 +1138,7 @@ function Rig.findSource(kind, ownerName)
 			return player.Character
 		end
 
-		local folder = workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+		local folder = Tracker.folder()
 		local model = folder and folder:FindFirstChild(ownerName)
 		if model and model:IsA("Model") and model:FindFirstChildOfClass("Humanoid") then
 			return model
@@ -1251,6 +1251,7 @@ local Signal = require("Util/Signal")
 local Logger = require("Features/AnimationLogger/Logger")
 
 local Players = Services.Players
+local LocalPlayer = Players.LocalPlayer
 
 local Tracker = {
 	Played = Signal.new(),
@@ -1347,51 +1348,107 @@ local function unhookAll()
 	end
 end
 
-local function watchFolder(folder)
-	if folderMaid then
-		folderMaid:Clean()
-	end
-	unhookAll()
-	folderMaid = Maid.new()
+local function isCharacter(model)
+	return model:IsA("Model")
+		and (
+			Players:GetPlayerFromCharacter(model) ~= nil
+			or model:FindFirstChildOfClass("Humanoid") ~= nil
+			or model:FindFirstChildOfClass("AnimationController") ~= nil
+		)
+end
 
-	folderMaid:Connect(folder.ChildAdded, hookCharacter)
-	folderMaid:Connect(folder.ChildRemoved, unhookCharacter)
-	folderMaid:Connect(folder.AncestryChanged, function()
-		if folder.Parent ~= workspace then
-			folderMaid:Clean()
-			unhookAll()
-		end
-	end)
-
-	for _, model in ipairs(folder:GetChildren()) do
+local function tryHookChild(folder, model)
+	if folder ~= workspace or isCharacter(model) then
 		hookCharacter(model)
 	end
 end
 
+local function watchFolder(folder)
+	if folder == Tracker.current then
+		return
+	end
+	if folderMaid then
+		folderMaid:Clean()
+	end
+	unhookAll()
+	Tracker.current = folder
+	folderMaid = Maid.new()
+	if not folder then
+		return
+	end
+
+	folderMaid:Connect(folder.ChildAdded, function(model)
+		if folder == workspace then
+			task.defer(tryHookChild, folder, model)
+		else
+			hookCharacter(model)
+		end
+	end)
+	folderMaid:Connect(folder.ChildRemoved, unhookCharacter)
+	folderMaid:Connect(folder.AncestryChanged, function()
+		if not folder:IsDescendantOf(game) then
+			watchFolder(nil)
+		end
+	end)
+
+	for _, model in ipairs(folder:GetChildren()) do
+		tryHookChild(folder, model)
+	end
+end
+
+local function findFolder()
+	local name = Config.AnimationLogger.ScanFolder
+	if name and name ~= "" and name ~= "Auto" then
+		return workspace:FindFirstChild(name)
+	end
+	local character = LocalPlayer.Character
+	local parent = character and character.Parent
+	if parent and parent:IsDescendantOf(workspace) or parent == workspace then
+		return parent
+	end
+end
+
 function Tracker.folder()
-	return workspace:FindFirstChild(Config.AnimationLogger.ScanFolder)
+	return Tracker.current or findFolder()
 end
 
 function Tracker.start(maid)
-	local name = Config.AnimationLogger.ScanFolder
-
-	maid:Give(workspace.ChildAdded:Connect(function(child)
-		if child.Name == name then
-			watchFolder(child)
+	local function update()
+		local folder = findFolder()
+		if folder then
+			watchFolder(folder)
 		end
-	end))
-
-	local folder = Tracker.folder()
-	if folder then
-		watchFolder(folder)
 	end
 
+	local charMaid = maid:Extend()
+	local function onCharacter(character)
+		charMaid:Clean()
+		if character then
+			charMaid:Connect(character.AncestryChanged, function()
+				task.defer(update)
+			end)
+		end
+		task.defer(update)
+	end
+
+	maid:Connect(LocalPlayer.CharacterAdded, onCharacter)
+	maid:Connect(workspace.ChildAdded, function(child)
+		if not Tracker.current then
+			task.defer(update)
+		elseif child.Name == Config.AnimationLogger.ScanFolder then
+			task.defer(update)
+		end
+	end)
+	onCharacter(LocalPlayer.Character)
+	update()
+
 	maid:Give(function()
+		watchFolder(nil)
 		if folderMaid then
 			folderMaid:Clean()
 			folderMaid = nil
 		end
-		unhookAll()
+		Tracker.current = nil
 	end)
 end
 
@@ -1401,6 +1458,7 @@ end
 __modules["Features/AnimationLogger"] = function()
 local Services = require("Util/Services")
 local Clipboard = require("Util/Clipboard")
+local LazyDropdown = require("Util/LazyDropdown")
 local Config = require("Config")
 local Logger = require("Features/AnimationLogger/Logger")
 local Scanner = require("Features/AnimationLogger/Scanner")
@@ -1413,7 +1471,6 @@ local LocalPlayer = Services.Players.LocalPlayer
 
 local AnimationLogger = {
 	Title = "Animations",
-	Icon = "activity",
 	IgnoreOptions = { "Search", "AnimList" },
 }
 
@@ -1422,8 +1479,7 @@ local function label(entry)
 end
 
 function AnimationLogger.build(Tab, ctx)
-	local Window, Fluent, maid = ctx.Window, ctx.Fluent, ctx.maid
-	local Options = Fluent.Options
+	local Library, maid, notify = ctx.Library, ctx.maid, ctx.notify
 
 	local state = {
 		search = "",
@@ -1431,13 +1487,9 @@ function AnimationLogger.build(Tab, ctx)
 		notify = false,
 		selectedId = nil,
 		labelToId = {},
-		dirty = true,
-		detailsDirty = false,
+		summaryDirty = true,
+		detailsDirty = true,
 	}
-
-	local function notify(title, content)
-		Fluent:Notify({ Title = title, Content = content, Duration = 3 })
-	end
 
 	local function currentList()
 		return Logger.list({
@@ -1450,84 +1502,82 @@ function AnimationLogger.build(Tab, ctx)
 		return state.selectedId and Logger.get(state.selectedId)
 	end
 
-	local Filters = Tab:AddSection("Filters")
+	local list
+	local function changed()
+		state.summaryDirty = true
+		if list then
+			list.markDirty()
+		end
+	end
+
+	local Filters = Tab:AddLeftGroupbox("Filters")
 
 	Filters:AddInput("Search", {
-		Title = "Search",
+		Text = "Search",
 		Placeholder = "name, id or player...",
 		Default = "",
 		Numeric = false,
 		Finished = false,
+		ClearTextOnFocus = false,
 		Callback = function(text)
 			state.search = text:lower()
-			state.dirty = true
+			changed()
 		end,
 	})
 
-	Filters:AddToggle("OnlyMe", { Title = "Only my animations", Default = false })
-	Options.OnlyMe:OnChanged(function(value)
-		state.onlyMe = value
-		state.dirty = true
-	end)
-
-	Filters:AddToggle("Paused", { Title = "Pause logging", Default = false })
-	Options.Paused:OnChanged(function(value)
-		Logger.paused = value
-	end)
-
-	Filters:AddToggle("NotifyNew", { Title = "Notify on new animation", Default = false })
-	Options.NotifyNew:OnChanged(function(value)
-		state.notify = value
-	end)
-
-	local Log = Tab:AddSection("Animations")
-
-	local summary =
-		Log:AddParagraph({ Title = "0 logged", Content = "Animations show up here as they play." })
-
-	local dropdown = Log:AddDropdown("AnimList", {
-		Title = "Logged animations",
-		Description = "Most recently played first",
-		Values = {},
-		Multi = false,
+	Filters:AddToggle("OnlyMe", {
+		Text = "Only my animations",
+		Default = false,
+		Callback = function(value)
+			state.onlyMe = value
+			changed()
+		end,
 	})
 
-	local details = Log:AddParagraph({ Title = "Nothing selected", Content = "Pick an animation above." })
+	Filters:AddToggle("Paused", {
+		Text = "Pause logging",
+		Default = false,
+		Callback = function(value)
+			Logger.paused = value
+			state.summaryDirty = true
+		end,
+	})
 
-	local function showDetails()
-		local e = selected()
-		if not e then
-			details:SetTitle("Nothing selected")
-			details:SetDesc("Pick an animation above.")
-			return
-		end
-		
-		details:SetTitle(e.name)
-		details:SetDesc(
-			string.format(
-				"ID: rbxassetid://%s\nPlayed by: %s\nTimes played: %d",
-				e.id,
-				table.concat(e.ownerList, ", "),
-				e.plays
-			)
-		)
-	end
+	Filters:AddToggle("NotifyNew", {
+		Text = "Notify on new animation",
+		Default = false,
+		Callback = function(value)
+			state.notify = value
+		end,
+	})
 
-	Options.AnimList:OnChanged(function(value)
-		local previous = state.selectedId
-		state.selectedId = value and state.labelToId[value] or state.selectedId
-		showDetails()
+	local Log = Tab:AddRightGroupbox("Animations")
 
-		local e = selected()
-		if e and e.id ~= previous and PreviewWindow.isOpen() then
-			PreviewWindow.show(e)
-		end
-	end)
+	local summary = Log:AddLabel("0 logged", true)
 
-	local function refresh()
-		local list = currentList()
+	local dropdown = Log:AddDropdown("AnimList", {
+		Text = "Logged animations",
+		Tooltip = "Most recently played first. Updates when you open it",
+		Values = {},
+		Multi = false,
+		Searchable = true,
+		AllowNull = true,
+		MaxVisibleDropdownItems = 10,
+		Callback = function(value)
+			local previous = state.selectedId
+			state.selectedId = value and state.labelToId[value] or state.selectedId
+			state.detailsDirty = true
+
+			local e = selected()
+			if e and e.id ~= previous and PreviewWindow.isOpen() then
+				PreviewWindow.show(e)
+			end
+		end,
+	})
+
+	list = LazyDropdown.wrap(dropdown, function()
 		local values, labelToId = {}, {}
-		for i, e in ipairs(list) do
+		for i, e in ipairs(currentList()) do
 			if i > Config.AnimationLogger.MaxDropdownItems then
 				break
 			end
@@ -1536,13 +1586,41 @@ function AnimationLogger.build(Tab, ctx)
 			labelToId[l] = e.id
 		end
 		state.labelToId = labelToId
-		dropdown:SetValues(values)
-		summary:SetTitle(string.format("%d logged  •  %d shown", Logger.count, #list))
-		summary:SetDesc(Logger.paused and "Logging is paused." or "Listening for animations...")
-		showDetails()
+		return values
+	end)
+
+	local details = Log:AddLabel("Nothing selected.", true)
+
+	local lastSummary, lastDetails
+	local function updateSummary()
+		local text = string.format(
+			"%d logged  •  %d shown\n%s",
+			Logger.count,
+			#currentList(),
+			Logger.paused and "Logging is paused." or "Listening for animations..."
+		)
+		if text ~= lastSummary then
+			lastSummary = text
+			summary:SetText(text)
+		end
 	end
 
-	local Actions = Tab:AddSection("Selected animation")
+	local function updateDetails()
+		local e = selected()
+		local text = e
+				and string.format(
+					"%s\nID: rbxassetid://%s\nPlayed by: %s\nTimes played: %d",
+					e.name,
+					e.id,
+					table.concat(e.ownerList, ", "),
+					e.plays
+				)
+			or "Nothing selected."
+		if text ~= lastDetails then
+			lastDetails = text
+			details:SetText(text)
+		end
+	end
 
 	local function withSelected(fn)
 		return function()
@@ -1555,40 +1633,36 @@ function AnimationLogger.build(Tab, ctx)
 		end
 	end
 
-	Actions:AddButton({
-		Title = "Copy ID",
-		Description = "Copies rbxassetid://<id>",
-		Callback = withSelected(function(e)
+	Log:AddButton({
+		Text = "Copy ID",
+		Tooltip = "Copies rbxassetid://<id>",
+		Func = withSelected(function(e)
 			local ok = Clipboard.copy("rbxassetid://" .. e.id)
 			notify(ok and "Copied" or "Clipboard unavailable", e.id)
 		end),
-	})
-
-	Actions:AddButton({
-		Title = "Copy number only",
-		Callback = withSelected(function(e)
+	}):AddButton({
+		Text = "Number only",
+		Func = withSelected(function(e)
 			local ok = Clipboard.copy(e.id)
 			notify(ok and "Copied" or "Clipboard unavailable", e.id)
 		end),
 	})
 
-	Actions:AddButton({
-		Title = "Play on me",
-		Description = "Preview it on your own character",
-		Callback = withSelected(function(e)
+	Log:AddButton({
+		Text = "Play on me",
+		Tooltip = "Preview it on your own character",
+		Func = withSelected(function(e)
 			local ok, err = Preview.play(e.id)
 			if not ok then
 				notify("Couldn't play", err)
 			end
 		end),
-	})
+	}):AddButton({ Text = "Stop", Func = Preview.stop })
 
-	Actions:AddButton({ Title = "Stop preview", Callback = Preview.stop })
-
-	Actions:AddButton({
-		Title = "Open preview window",
-		Description = "Pop-out 3D rig viewer with its own animation list",
-		Callback = function()
+	Log:AddButton({
+		Text = "Open preview window",
+		Tooltip = "Pop-out 3D rig viewer with its own animation list",
+		Func = function()
 			local e = selected()
 			if e then
 				PreviewWindow.show(e)
@@ -1598,78 +1672,73 @@ function AnimationLogger.build(Tab, ctx)
 		end,
 	})
 
-	local Tools = Tab:AddSection("Tools")
+	local Tools = Tab:AddLeftGroupbox("Tools")
 
 	Tools:AddButton({
-		Title = "Scan game",
-		Description = "Find Animation objects that exist but aren't playing",
-		Callback = function()
+		Text = "Scan game",
+		Tooltip = "Find Animation objects that exist but aren't playing",
+		Func = function()
 			local found = Scanner.scan()
 			notify("Scan finished", string.format("%d new animation(s) found", found))
 		end,
 	})
 
 	Tools:AddButton({
-		Title = "Copy all shown",
-		Callback = function()
-			local list = currentList()
-			local ok = Clipboard.copy(Exporter.toText(list))
-			notify(ok and "Copied" or "Clipboard unavailable", string.format("%d animation(s)", #list))
+		Text = "Copy all shown",
+		Func = function()
+			local shown = currentList()
+			local ok = Clipboard.copy(Exporter.toText(shown))
+			notify(ok and "Copied" or "Clipboard unavailable", string.format("%d animation(s)", #shown))
 		end,
 	})
 
 	Tools:AddButton({
-		Title = "Save to file",
-		Description = "Writes to workspace/" .. Config.AnimationLogger.SaveFolder,
-		Callback = function()
+		Text = "Save to file",
+		Tooltip = "Writes to workspace/" .. Config.AnimationLogger.SaveFolder,
+		Func = function()
 			local ok, result = Exporter.save(currentList())
 			notify(ok and "Saved" or "Save failed", result)
 		end,
 	})
 
 	Tools:AddButton({
-		Title = "Clear log",
-		Callback = function()
-			Window:Dialog({
-				Title = "Clear log?",
-				Content = "This removes every logged animation.",
-				Buttons = {
-					{ Title = "Clear", Callback = Logger.clear },
-					{ Title = "Cancel", Callback = function() end },
-				},
-			})
-		end,
+		Text = "Clear log",
+		Tooltip = "Double click to remove every logged animation",
+		DoubleClick = true,
+		Func = Logger.clear,
 	})
 
-	maid:Give(Logger.Added:Connect(function(entry)
-		state.dirty = true
+	maid:Connect(Logger.Added, function(entry)
+		changed()
 		local now = os.clock()
 		if state.notify and now - (state.lastNotify or 0) > 0.5 then
 			state.lastNotify = now
 			notify("New animation", label(entry))
 		end
-	end))
-	maid:Give(Logger.Updated:Connect(function(entry, changed)
-		if changed then
-			state.dirty = true
-		elseif entry.id == state.selectedId then
+	end)
+	maid:Connect(Logger.Updated, function(entry, didChange)
+		if didChange then
+			changed()
+		end
+		if entry.id == state.selectedId then
 			state.detailsDirty = true
 		end
-	end))
-	maid:Give(Logger.Cleared:Connect(function()
+	end)
+	maid:Connect(Logger.Cleared, function()
 		state.selectedId = nil
-		state.dirty = true
-	end))
+		state.detailsDirty = true
+		changed()
+	end)
 
-	task.spawn(function()
-		while not Fluent.Unloaded do
-			if state.dirty then
-				state.dirty = false
+	maid:Spawn(function()
+		while not Library.Unloaded do
+			if state.summaryDirty then
+				state.summaryDirty = false
+				pcall(updateSummary)
+			end
+			if state.detailsDirty then
 				state.detailsDirty = false
-				pcall(refresh)
-			elseif state.detailsDirty then
-				state.detailsDirty = false
-				pcall(showDetails)
+				pcall(updateDetails)
 			end
 			task.wait(Config.AnimationLogger.RefreshInterval)
 		end
@@ -2171,13 +2240,13 @@ end
 
 __modules["Features/AutoReact"] = function()
 local Logger = require("Features/AnimationLogger/Logger")
+local LazyDropdown = require("Util/LazyDropdown")
 local PreviewWindow = require("Features/AnimationLogger/PreviewWindow")
 local Reactions = require("Features/AutoReact/Reactions")
 local Engine = require("Features/AutoReact/Engine")
 
 local AutoReact = {
 	Title = "Auto react",
-	Icon = "shield",
 	IgnoreOptions = { "ReactSaved" },
 }
 
@@ -2188,195 +2257,210 @@ local function labelFor(id)
 end
 
 function AutoReact.build(Tab, ctx)
-	local Window, Fluent, maid = ctx.Window, ctx.Fluent, ctx.maid
-	local Options = Fluent.Options
+	local Library, maid, notify = ctx.Library, ctx.maid, ctx.notify
 	local settings = Engine.settings
-	local state = { labelToId = {}, selectedId = nil, dirty = true, notifyLearn = true }
+	local state = { labelToId = {}, selectedId = nil, summaryDirty = true, notifyLearn = true }
 
-	local function notify(title, content)
-		Fluent:Notify({ Title = title, Content = content, Duration = 3 })
-	end
+	local Main = Tab:AddLeftGroupbox("Auto react")
 
-	local Main = Tab:AddSection("Auto react")
+	Main:AddLabel(
+		"When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning.",
+		true
+	)
 
-	Main:AddParagraph({
-		Title = "How it works",
-		Content = "When someone near you plays an animation that has a reaction, w_w presses the key at its hit time. Set reactions in the preview window, or turn on learning below.",
+	Main:AddToggle("ReactEnabled", {
+		Text = "Enabled",
+		Default = false,
+		Risky = true,
+		Callback = function(value)
+			settings.enabled = value
+		end,
 	})
 
-	Main:AddToggle("ReactEnabled", { Title = "Enabled", Default = false })
-	Options.ReactEnabled:OnChanged(function(value)
-		settings.enabled = value
-	end)
-
-	Main:AddToggle("ReactUseLearned", { Title = "React to learned animations", Default = true })
-	Options.ReactUseLearned:OnChanged(function(value)
-		settings.useLearned = value
-	end)
+	Main:AddToggle("ReactUseLearned", {
+		Text = "React to learned animations",
+		Default = true,
+		Callback = function(value)
+			settings.useLearned = value
+		end,
+	})
 
 	Main:AddSlider("ReactRange", {
-		Title = "Range (studs)",
+		Text = "Range",
+		Suffix = " studs",
 		Default = settings.range,
 		Min = 4,
 		Max = 80,
 		Rounding = 0,
+		Callback = function(value)
+			settings.range = value
+		end,
 	})
-	Options.ReactRange:OnChanged(function(value)
-		settings.range = value
-	end)
 
 	Main:AddSlider("ReactLead", {
-		Title = "Press early (ms)",
-		Description = "Raise this if you're still getting hit",
+		Text = "Press early",
+		Suffix = " ms",
+		Tooltip = "Raise this if you're still getting hit",
 		Default = math.floor(settings.lead * 1000),
 		Min = 0,
 		Max = 400,
 		Rounding = 0,
+		Callback = function(value)
+			settings.lead = value / 1000
+		end,
 	})
-	Options.ReactLead:OnChanged(function(value)
-		settings.lead = value / 1000
-	end)
 
 	Main:AddSlider("ReactBlockHold", {
-		Title = "Block hold time (s)",
+		Text = "Block hold time",
+		Suffix = " s",
 		Default = settings.blockHold,
 		Min = 0.1,
 		Max = 3,
 		Rounding = 2,
+		Callback = function(value)
+			settings.blockHold = value
+		end,
 	})
-	Options.ReactBlockHold:OnChanged(function(value)
-		settings.blockHold = value
-	end)
 
-	local Ping = Tab:AddSection("Ping")
+	local Ping = Tab:AddLeftGroupbox("Ping")
 
-	local pingInfo = Ping:AddParagraph({ Title = "Ping: ...", Content = "" })
+	local pingInfo = Ping:AddLabel("Ping: ...", true)
 
 	Ping:AddDropdown("ReactPingMode", {
-		Title = "Ping adjustment",
-		Description = "Auto reads your ping, Manual uses the value below",
+		Text = "Ping adjustment",
+		Tooltip = "Auto reads your ping, Manual uses the slider below",
 		Values = { "Auto", "Manual", "Off" },
 		Default = settings.pingMode,
+		Callback = function(value)
+			settings.pingMode = value
+		end,
 	})
-	Options.ReactPingMode:OnChanged(function(value)
-		settings.pingMode = value
-	end)
 
 	Ping:AddSlider("ReactPingScale", {
-		Title = "Auto amount (%)",
-		Description = "How much of your ping to press early by. 50% is one-way latency",
+		Text = "Auto amount",
+		Suffix = "%",
+		Tooltip = "How much of your ping to press early by. 50% is one-way latency",
 		Default = math.floor(settings.pingScale * 100),
 		Min = 0,
 		Max = 150,
 		Rounding = 0,
+		Callback = function(value)
+			settings.pingScale = value / 100
+		end,
 	})
-	Options.ReactPingScale:OnChanged(function(value)
-		settings.pingScale = value / 100
-	end)
 
 	Ping:AddSlider("ReactPingManual", {
-		Title = "Manual adjustment (ms)",
+		Text = "Manual adjustment",
+		Suffix = " ms",
 		Default = settings.pingManual,
 		Min = 0,
 		Max = 500,
 		Rounding = 0,
+		Callback = function(value)
+			settings.pingManual = value
+		end,
 	})
-	Options.ReactPingManual:OnChanged(function(value)
-		settings.pingManual = value
-	end)
 
-	local Keys = Tab:AddSection("Keys")
+	local Keys = Tab:AddRightGroupbox("Keys")
 
 	for _, action in ipairs(Reactions.ACTIONS) do
-		local id = "ReactKey" .. action
-		Keys:AddInput(id, {
-			Title = action .. " key",
+		Keys:AddInput("ReactKey" .. action, {
+			Text = action .. " key",
 			Default = settings.keys[action],
 			Placeholder = "F",
 			Numeric = false,
 			Finished = true,
-		})
-		Options[id]:OnChanged(function(value)
-			local ok = pcall(function()
-				return Enum.KeyCode[value]
-			end)
-			if ok and value ~= "" then
-				settings.keys[action] = value
-			end
-		end)
-		Keys:AddButton({
-			Title = "Test " .. action,
-			Description = "Sends the " .. action:lower() .. " input now",
-			Callback = function()
-				if not Engine.send(action) then
-					notify("Couldn't send", "Check the key name (like F, Q, Space, LeftShift)")
+			ClearTextOnFocus = false,
+			Callback = function(value)
+				local ok = pcall(function()
+					return Enum.KeyCode[value]
+				end)
+				if ok and value ~= "" then
+					settings.keys[action] = value
 				end
 			end,
 		})
 	end
 
+	Keys:AddButton({
+		Text = "Test Parry",
+		Func = function()
+			Engine.send("Parry")
+		end,
+	})
+		:AddButton({
+			Text = "Test Block",
+			Func = function()
+				Engine.send("Block")
+			end,
+		})
+	Keys:AddButton({
+		Text = "Test Dash",
+		Func = function()
+			Engine.send("Dash")
+		end,
+	})
+
 	Keys:AddDropdown("ReactInputMethod", {
-		Title = "Input method",
-		Description = "Auto uses keypress when available, otherwise VirtualInputManager",
+		Text = "Input method",
+		Tooltip = "Auto uses keypress when available, otherwise VirtualInputManager",
 		Values = { "Auto", "VirtualInputManager" },
 		Default = "Auto",
-	})
-	Options.ReactInputMethod:OnChanged(function(value)
-		settings.inputMethod = value
-	end)
-
-	local Learn = Tab:AddSection("Learn from damage")
-
-	Learn:AddParagraph({
-		Title = "Learning",
-		Content = "When you take damage, the most recent attack animation from someone in range gets saved with that hit time. Get hit a couple of times by a move to make its timing reliable.",
+		Callback = function(value)
+			settings.inputMethod = value
+		end,
 	})
 
-	Learn:AddToggle("ReactLearn", { Title = "Learn from damage", Default = false })
-	Options.ReactLearn:OnChanged(function(value)
-		settings.learn = value
-	end)
+	local Learn = Tab:AddRightGroupbox("Learn from damage")
+
+	Learn:AddLabel(
+		"When you take damage, the latest attack animation from someone in range is saved with that hit time. Get hit by a move a couple of times to make it reliable.",
+		true
+	)
+
+	Learn:AddToggle("ReactLearn", {
+		Text = "Learn from damage",
+		Default = false,
+		Callback = function(value)
+			settings.learn = value
+		end,
+	})
 
 	Learn:AddDropdown("ReactLearnAction", {
-		Title = "Learned animations use",
+		Text = "Learned animations use",
 		Values = Reactions.ACTIONS,
 		Default = settings.learnAction,
+		Callback = function(value)
+			settings.learnAction = value
+		end,
 	})
-	Options.ReactLearnAction:OnChanged(function(value)
-		settings.learnAction = value
-	end)
 
 	Learn:AddSlider("ReactLearnWindow", {
-		Title = "Max time to hit (s)",
-		Description = "Animations that started longer ago than this are ignored",
+		Text = "Max time to hit",
+		Suffix = " s",
+		Tooltip = "Animations that started longer ago than this are ignored",
 		Default = settings.learnWindow,
 		Min = 0.3,
 		Max = 4,
 		Rounding = 1,
+		Callback = function(value)
+			settings.learnWindow = value
+		end,
 	})
-	Options.ReactLearnWindow:OnChanged(function(value)
-		settings.learnWindow = value
-	end)
 
-	Learn:AddToggle("ReactNotifyLearn", { Title = "Notify when something is learned", Default = true })
-	Options.ReactNotifyLearn:OnChanged(function(value)
-		state.notifyLearn = value
-	end)
-
-	local Saved = Tab:AddSection("Saved reactions")
-
-	local summary = Saved:AddParagraph({ Title = "0 saved", Content = "Saved per game." })
-
-	local dropdown = Saved:AddDropdown("ReactSaved", {
-		Title = "Reactions",
-		Values = {},
-		Multi = false,
+	Learn:AddToggle("ReactNotifyLearn", {
+		Text = "Notify when something is learned",
+		Default = true,
+		Callback = function(value)
+			state.notifyLearn = value
+		end,
 	})
-	Options.ReactSaved:OnChanged(function(value)
-		state.selectedId = value and state.labelToId[value] or nil
-	end)
 
-	local function refresh()
+	local Saved = Tab:AddRightGroupbox("Saved reactions")
+
+	local summary = Saved:AddLabel("0 saved for this game", true)
+
+	local function savedIds()
 		local ids = {}
 		for id, r in pairs(Reactions.data) do
 			if r.action or r.hit then
@@ -2384,16 +2468,30 @@ function AutoReact.build(Tab, ctx)
 			end
 		end
 		table.sort(ids)
+		return ids
+	end
+
+	local dropdown = Saved:AddDropdown("ReactSaved", {
+		Text = "Reactions",
+		Values = {},
+		Multi = false,
+		Searchable = true,
+		AllowNull = true,
+		Callback = function(value)
+			state.selectedId = value and state.labelToId[value] or nil
+		end,
+	})
+
+	local list = LazyDropdown.wrap(dropdown, function()
 		local values, labelToId = {}, {}
-		for _, id in ipairs(ids) do
+		for _, id in ipairs(savedIds()) do
 			local l = labelFor(id)
 			table.insert(values, l)
 			labelToId[l] = id
 		end
 		state.labelToId = labelToId
-		dropdown:SetValues(values)
-		summary:SetTitle(string.format("%d saved", #ids))
-	end
+		return values
+	end)
 
 	local function withSelected(fn)
 		return function()
@@ -2406,8 +2504,8 @@ function AutoReact.build(Tab, ctx)
 	end
 
 	Saved:AddButton({
-		Title = "Open in preview",
-		Callback = withSelected(function(id)
+		Text = "Open in preview",
+		Func = withSelected(function(id)
 			local entry = Logger.get(id)
 			if entry then
 				PreviewWindow.show(entry)
@@ -2415,36 +2513,28 @@ function AutoReact.build(Tab, ctx)
 				notify("Not logged yet", "That animation hasn't played this session.")
 			end
 		end),
-	})
-
-	Saved:AddButton({
-		Title = "Delete selected",
-		Callback = withSelected(function(id)
+	}):AddButton({
+		Text = "Delete",
+		Func = withSelected(function(id)
 			Reactions.clear(id)
 			state.selectedId = nil
 		end),
 	})
 
 	Saved:AddButton({
-		Title = "Delete all",
-		Callback = function()
-			Window:Dialog({
-				Title = "Delete all reactions?",
-				Content = "This removes every saved reaction for this game.",
-				Buttons = {
-					{ Title = "Delete", Callback = Reactions.clearAll },
-					{ Title = "Cancel", Callback = function() end },
-				},
-			})
-		end,
+		Text = "Delete all",
+		Tooltip = "Double click to remove every saved reaction for this game",
+		DoubleClick = true,
+		Func = Reactions.clearAll,
 	})
 
 	maid:Connect(Reactions.Changed, function()
-		state.dirty = true
+		state.summaryDirty = true
+		list.markDirty()
 	end)
 	maid:Connect(Logger.Added, function(entry)
 		if Reactions.get(entry.id) then
-			state.dirty = true
+			list.markDirty()
 		end
 	end)
 	maid:Connect(Engine.Learned, function(id, r)
@@ -2453,22 +2543,28 @@ function AutoReact.build(Tab, ctx)
 		end
 	end)
 
-	task.spawn(function()
-		while not Fluent.Unloaded do
-			if state.dirty then
-				state.dirty = false
-				pcall(refresh)
+	local lastPing
+	maid:Spawn(function()
+		while not Library.Unloaded do
+			if state.summaryDirty then
+				state.summaryDirty = false
+				pcall(function()
+					summary:SetText(string.format("%d saved for this game", #savedIds()))
+				end)
 			end
 			pcall(function()
-				pingInfo:SetTitle(string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5)))
-				pingInfo:SetDesc(
-					string.format(
-						"Pressing %d ms early (%d ms ping + %d ms press early)",
-						math.floor((Engine.pingOffset() + settings.lead) * 1000 + 0.5),
-						math.floor(Engine.pingOffset() * 1000 + 0.5),
-						math.floor(settings.lead * 1000 + 0.5)
-					)
+				local offset = Engine.pingOffset()
+				local text = string.format(
+					"Ping: %d ms\nPressing %d ms early (%d ping + %d press early)",
+					math.floor(Engine.ping() * 1000 + 0.5),
+					math.floor((offset + settings.lead) * 1000 + 0.5),
+					math.floor(offset * 1000 + 0.5),
+					math.floor(settings.lead * 1000 + 0.5)
 				)
+				if text ~= lastPing then
+					lastPing = text
+					pingInfo:SetText(text)
+				end
 			end)
 			task.wait(0.5)
 		end
@@ -2493,7 +2589,7 @@ local Config = require("Config")
 local HomeTab = {}
 
 function HomeTab.build(Window, features)
-	local Tab = Window:AddTab({ Title = "Home", Icon = "home" })
+	local Tab = Window:AddTab("Home")
 
 	local executor = "unknown"
 	if identifyexecutor then
@@ -2503,21 +2599,18 @@ function HomeTab.build(Window, features)
 		end
 	end
 
-	Tab:AddParagraph({
-		Title = Config.Title .. "  v" .. Config.Version,
-		Content = string.format(
-			"Executor: %s\nPlace: %d\nToggle UI: %s",
-			executor,
-			game.PlaceId,
-			Config.ToggleKey.Name
-		),
-	})
+	local Info = Tab:AddLeftGroupbox(Config.Title .. "  v" .. Config.Version)
+	Info:AddLabel(
+		string.format("Executor: %s\nPlace: %d\nToggle UI: %s", executor, game.PlaceId, Config.ToggleKey.Name),
+		true
+	)
 
 	local names = {}
 	for _, feature in ipairs(features) do
 		table.insert(names, "• " .. feature.Title)
 	end
-	Tab:AddParagraph({ Title = "Features", Content = table.concat(names, "\n") })
+	local List = Tab:AddRightGroupbox("Features")
+	List:AddLabel(table.concat(names, "\n"), true)
 
 	return Tab
 end
@@ -2533,9 +2626,9 @@ local function load(url)
 end
 
 return {
-	Fluent = load(Config.Fluent.Library),
-	SaveManager = load(Config.Fluent.SaveManager),
-	InterfaceManager = load(Config.Fluent.InterfaceManager),
+	Library = load(Config.Linoria.Library),
+	SaveManager = load(Config.Linoria.SaveManager),
+	ThemeManager = load(Config.Linoria.ThemeManager),
 }
 end
 
@@ -2545,13 +2638,37 @@ local Config = require("Config")
 local SettingsTab = {}
 
 function SettingsTab.build(Window, lib, features)
-	local Tab = Window:AddTab({ Title = "Settings", Icon = "settings" })
+	local Library = lib.Library
+	local Tab = Window:AddTab("Settings")
 
-	lib.SaveManager:SetLibrary(lib.Fluent)
-	lib.InterfaceManager:SetLibrary(lib.Fluent)
+	local Menu = Tab:AddLeftGroupbox("Menu")
+	Menu:AddLabel("Menu bind"):AddKeyPicker("MenuKeybind", {
+		Default = Config.ToggleKey.Name,
+		NoUI = true,
+		Text = "Menu keybind",
+	})
+	Menu:AddToggle("CustomCursor", {
+		Text = "Custom cursor",
+		Default = false,
+		Callback = function(value)
+			Library.ShowCustomCursor = value
+		end,
+	})
+	Menu:AddButton({
+		Text = "Unload",
+		DoubleClick = true,
+		Tooltip = "Double click to unload w_w",
+		Func = function()
+			Library:Unload()
+		end,
+	})
+	Library.ToggleKeybind = Library.Options.MenuKeybind
+
+	lib.ThemeManager:SetLibrary(Library)
+	lib.SaveManager:SetLibrary(Library)
 
 	lib.SaveManager:IgnoreThemeSettings()
-	local ignore = {}
+	local ignore = { "MenuKeybind" }
 	for _, feature in ipairs(features) do
 		for _, option in ipairs(feature.IgnoreOptions or {}) do
 			table.insert(ignore, option)
@@ -2559,11 +2676,11 @@ function SettingsTab.build(Window, lib, features)
 	end
 	lib.SaveManager:SetIgnoreIndexes(ignore)
 
-	lib.InterfaceManager:SetFolder(Config.ConfigFolder)
+	lib.ThemeManager:SetFolder(Config.ConfigFolder)
 	lib.SaveManager:SetFolder(Config.ConfigFolder .. "/" .. tostring(game.PlaceId))
 
-	lib.InterfaceManager:BuildInterfaceSection(Tab)
 	lib.SaveManager:BuildConfigSection(Tab)
+	lib.ThemeManager:ApplyToTab(Tab)
 
 	return Tab
 end
@@ -2589,6 +2706,51 @@ function Clipboard.copy(text)
 end
 
 return Clipboard
+end
+
+__modules["Util/LazyDropdown"] = function()
+local LazyDropdown = {}
+
+function LazyDropdown.wrap(dropdown, getValues)
+	local self = { dirty = true, last = nil }
+
+	local function same(a, b)
+		if not a or #a ~= #b then
+			return false
+		end
+		for i, v in ipairs(a) do
+			if b[i] ~= v then
+				return false
+			end
+		end
+		return true
+	end
+
+	function self.rebuild()
+		self.dirty = false
+		local values = getValues()
+		if not same(self.last, values) then
+			self.last = values
+			dropdown:SetValues(values)
+		end
+	end
+
+	function self.markDirty()
+		self.dirty = true
+	end
+
+	local open = dropdown.OpenDropdown
+	dropdown.OpenDropdown = function(...)
+		if self.dirty then
+			pcall(self.rebuild)
+		end
+		return open(...)
+	end
+
+	return self
+end
+
+return LazyDropdown
 end
 
 __modules["Util/Maid"] = function()
@@ -2812,57 +2974,52 @@ if env.__w_wUnload then
 end
 
 local lib = require("UI/Library")
-local Fluent = lib.Fluent
+local Library = lib.Library
 local maid = Maid.new()
 
-local Window = Fluent:CreateWindow({
-	Title = Config.Title,
-	SubTitle = "v" .. Config.Version,
-	TabWidth = 160,
+Library.ShowCustomCursor = false
+
+local Window = Library:CreateWindow({
+	Title = Config.Title .. "  v" .. Config.Version,
+	Center = true,
+	AutoShow = true,
+	Resizable = true,
 	Size = Config.WindowSize,
-	Acrylic = false,
-	Theme = Config.Theme,
-	MinimizeKey = Config.ToggleKey,
+	ShowCustomCursor = false,
+	UnlockMouseWhileOpen = true,
+	TabPadding = 8,
+	MenuFadeTime = 0.2,
 })
 
-local ctx = { Window = Window, Fluent = Fluent, maid = maid }
+local function notify(title, content, duration)
+	Library:Notify({ Title = title, Description = content or "", Time = duration or 3 })
+end
+
+local ctx = { Window = Window, Library = Library, maid = maid, notify = notify }
 
 HomeTab.build(Window, Features)
 for _, feature in ipairs(Features) do
-	local Tab = Window:AddTab({ Title = feature.Title, Icon = feature.Icon })
+	local Tab = Window:AddTab(feature.Title)
 	local ok, err = pcall(feature.build, Tab, ctx)
 
 	if not ok then
-		Fluent:Notify({ Title = feature.Title .. " failed to load", Content = tostring(err), Duration = 8 })
+		notify(feature.Title .. " failed to load", tostring(err), 8)
 	end
 end
 
 SettingsTab.build(Window, lib, Features)
-Window:SelectTab(1)
 
-local function unload()
+Library:OnUnload(function()
 	maid:Clean()
-	if not Fluent.Unloaded then
-		Fluent:Destroy()
-	end
-
 	env.__w_wUnload = nil
-end
-env.__w_wUnload = unload
-
-task.spawn(function()
-	while not Fluent.Unloaded do
-		task.wait(1)
-	end
-	
-	maid:Clean()
 end)
+env.__w_wUnload = function()
+	if not Library.Unloaded then
+		Library:Unload()
+	end
+end
 
-Fluent:Notify({
-	Title = Config.Title,
-	Content = "Loaded. Press " .. Config.ToggleKey.Name .. " to hide/show.",
-	Duration = 5,
-})
+notify(Config.Title, "Loaded. Press " .. Config.ToggleKey.Name .. " to hide/show.", 5)
 
 lib.SaveManager:LoadAutoloadConfig()
 end
