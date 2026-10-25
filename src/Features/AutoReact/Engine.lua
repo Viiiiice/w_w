@@ -6,6 +6,7 @@ local Tracker = require("Features/AnimationLogger/Tracker")
 local Reactions = require("Features/AutoReact/Reactions")
 
 local Players = Services.Players
+local Stats = Services.Stats
 local VirtualInputManager = Services.VirtualInputManager
 local LocalPlayer = Players.LocalPlayer
 
@@ -20,6 +21,9 @@ local Engine = {
 		blockHold = Config.AutoReact.BlockHold,
 		learnWindow = Config.AutoReact.LearnWindow,
 		inputMethod = "Auto",
+		pingMode = "Auto",
+		pingManual = 0,
+		pingScale = 0.5,
 		keys = table.clone(Config.AutoReact.Keys),
 	},
 	Fired = Signal.new(),
@@ -47,6 +51,7 @@ local VK = {
 	Nine = 0x39,
 }
 
+local smoothedPing = nil
 local pending = {}
 local lastFire = {}
 local held = {}
@@ -122,6 +127,33 @@ function Engine.send(action)
 	return true
 end
 
+local function samplePing()
+	local ok, ms = pcall(function()
+		return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+	end)
+	if ok and type(ms) == "number" and ms > 0 then
+		return ms / 1000
+	end
+	local ok2, seconds = pcall(LocalPlayer.GetNetworkPing, LocalPlayer)
+	if ok2 and type(seconds) == "number" and seconds > 0 then
+		return seconds * 2
+	end
+end
+
+function Engine.ping()
+	return smoothedPing or samplePing() or 0
+end
+
+function Engine.pingOffset()
+	local s = Engine.settings
+	if s.pingMode == "Manual" then
+		return s.pingManual / 1000
+	elseif s.pingMode == "Auto" then
+		return Engine.ping() * s.pingScale
+	end
+	return 0
+end
+
 local function rootOf(model)
 	return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
 end
@@ -181,7 +213,7 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 
-	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead)
+	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead - Engine.pingOffset())
 	local thread
 	thread = task.delay(wait, function()
 		maid:Remove(thread, true)
@@ -262,7 +294,19 @@ function Engine.start(maid)
 	end)
 	task.spawn(watchCharacter, charMaid, LocalPlayer.Character)
 
+	local running = true
+	maid:Spawn(function()
+		while running do
+			local sample = samplePing()
+			if sample then
+				smoothedPing = smoothedPing and (smoothedPing * 0.8 + sample * 0.2) or sample
+			end
+			task.wait(0.5)
+		end
+	end)
+
 	maid:Give(function()
+		running = false
 		table.clear(pending)
 		for code in pairs(held) do
 			pcall(release, code)

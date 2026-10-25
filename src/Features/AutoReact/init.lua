@@ -76,6 +76,43 @@ function AutoReact.build(Tab, ctx)
 		settings.blockHold = value
 	end)
 
+	local Ping = Tab:AddSection("Ping")
+
+	local pingInfo = Ping:AddParagraph({ Title = "Ping: ...", Content = "" })
+
+	Ping:AddDropdown("ReactPingMode", {
+		Title = "Ping adjustment",
+		Description = "Auto reads your ping, Manual uses the value below",
+		Values = { "Auto", "Manual", "Off" },
+		Default = settings.pingMode,
+	})
+	Options.ReactPingMode:OnChanged(function(value)
+		settings.pingMode = value
+	end)
+
+	Ping:AddSlider("ReactPingScale", {
+		Title = "Auto amount (%)",
+		Description = "How much of your ping to press early by. 50% is one-way latency",
+		Default = math.floor(settings.pingScale * 100),
+		Min = 0,
+		Max = 150,
+		Rounding = 0,
+	})
+	Options.ReactPingScale:OnChanged(function(value)
+		settings.pingScale = value / 100
+	end)
+
+	Ping:AddSlider("ReactPingManual", {
+		Title = "Manual adjustment (ms)",
+		Default = settings.pingManual,
+		Min = 0,
+		Max = 500,
+		Rounding = 0,
+	})
+	Options.ReactPingManual:OnChanged(function(value)
+		settings.pingManual = value
+	end)
+
 	local Keys = Tab:AddSection("Keys")
 
 	for _, action in ipairs(Reactions.ACTIONS) do
@@ -250,6 +287,17 @@ function AutoReact.build(Tab, ctx)
 				state.dirty = false
 				pcall(refresh)
 			end
+			pcall(function()
+				pingInfo:SetTitle(string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5)))
+				pingInfo:SetDesc(
+					string.format(
+						"Pressing %d ms early (%d ms ping + %d ms press early)",
+						math.floor((Engine.pingOffset() + settings.lead) * 1000 + 0.5),
+						math.floor(Engine.pingOffset() * 1000 + 0.5),
+						math.floor(settings.lead * 1000 + 0.5)
+					)
+				)
+			end)
 			task.wait(0.5)
 		end
 	end)

@@ -1691,6 +1691,7 @@ local Tracker = require("Features/AnimationLogger/Tracker")
 local Reactions = require("Features/AutoReact/Reactions")
 
 local Players = Services.Players
+local Stats = Services.Stats
 local VirtualInputManager = Services.VirtualInputManager
 local LocalPlayer = Players.LocalPlayer
 
@@ -1705,6 +1706,9 @@ local Engine = {
 		blockHold = Config.AutoReact.BlockHold,
 		learnWindow = Config.AutoReact.LearnWindow,
 		inputMethod = "Auto",
+		pingMode = "Auto",
+		pingManual = 0,
+		pingScale = 0.5,
 		keys = table.clone(Config.AutoReact.Keys),
 	},
 	Fired = Signal.new(),
@@ -1732,6 +1736,7 @@ local VK = {
 	Nine = 0x39,
 }
 
+local smoothedPing = nil
 local pending = {}
 local lastFire = {}
 local held = {}
@@ -1807,6 +1812,33 @@ function Engine.send(action)
 	return true
 end
 
+local function samplePing()
+	local ok, ms = pcall(function()
+		return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+	end)
+	if ok and type(ms) == "number" and ms > 0 then
+		return ms / 1000
+	end
+	local ok2, seconds = pcall(LocalPlayer.GetNetworkPing, LocalPlayer)
+	if ok2 and type(seconds) == "number" and seconds > 0 then
+		return seconds * 2
+	end
+end
+
+function Engine.ping()
+	return smoothedPing or samplePing() or 0
+end
+
+function Engine.pingOffset()
+	local s = Engine.settings
+	if s.pingMode == "Manual" then
+		return s.pingManual / 1000
+	elseif s.pingMode == "Auto" then
+		return Engine.ping() * s.pingScale
+	end
+	return 0
+end
+
 local function rootOf(model)
 	return model and (model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart)
 end
@@ -1866,7 +1898,7 @@ local function onPlayed(maid, model, track, rawId)
 		return
 	end
 
-	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead)
+	local wait = math.max(0, r.hit / trackSpeed(track) - s.lead - Engine.pingOffset())
 	local thread
 	thread = task.delay(wait, function()
 		maid:Remove(thread, true)
@@ -1947,7 +1979,19 @@ function Engine.start(maid)
 	end)
 	task.spawn(watchCharacter, charMaid, LocalPlayer.Character)
 
+	local running = true
+	maid:Spawn(function()
+		while running do
+			local sample = samplePing()
+			if sample then
+				smoothedPing = smoothedPing and (smoothedPing * 0.8 + sample * 0.2) or sample
+			end
+			task.wait(0.5)
+		end
+	end)
+
 	maid:Give(function()
+		running = false
 		table.clear(pending)
 		for code in pairs(held) do
 			pcall(release, code)
@@ -2204,6 +2248,43 @@ function AutoReact.build(Tab, ctx)
 		settings.blockHold = value
 	end)
 
+	local Ping = Tab:AddSection("Ping")
+
+	local pingInfo = Ping:AddParagraph({ Title = "Ping: ...", Content = "" })
+
+	Ping:AddDropdown("ReactPingMode", {
+		Title = "Ping adjustment",
+		Description = "Auto reads your ping, Manual uses the value below",
+		Values = { "Auto", "Manual", "Off" },
+		Default = settings.pingMode,
+	})
+	Options.ReactPingMode:OnChanged(function(value)
+		settings.pingMode = value
+	end)
+
+	Ping:AddSlider("ReactPingScale", {
+		Title = "Auto amount (%)",
+		Description = "How much of your ping to press early by. 50% is one-way latency",
+		Default = math.floor(settings.pingScale * 100),
+		Min = 0,
+		Max = 150,
+		Rounding = 0,
+	})
+	Options.ReactPingScale:OnChanged(function(value)
+		settings.pingScale = value / 100
+	end)
+
+	Ping:AddSlider("ReactPingManual", {
+		Title = "Manual adjustment (ms)",
+		Default = settings.pingManual,
+		Min = 0,
+		Max = 500,
+		Rounding = 0,
+	})
+	Options.ReactPingManual:OnChanged(function(value)
+		settings.pingManual = value
+	end)
+
 	local Keys = Tab:AddSection("Keys")
 
 	for _, action in ipairs(Reactions.ACTIONS) do
@@ -2378,6 +2459,17 @@ function AutoReact.build(Tab, ctx)
 				state.dirty = false
 				pcall(refresh)
 			end
+			pcall(function()
+				pingInfo:SetTitle(string.format("Ping: %d ms", math.floor(Engine.ping() * 1000 + 0.5)))
+				pingInfo:SetDesc(
+					string.format(
+						"Pressing %d ms early (%d ms ping + %d ms press early)",
+						math.floor((Engine.pingOffset() + settings.lead) * 1000 + 0.5),
+						math.floor(Engine.pingOffset() * 1000 + 0.5),
+						math.floor(settings.lead * 1000 + 0.5)
+					)
+				)
+			end)
 			task.wait(0.5)
 		end
 	end)
