@@ -12,8 +12,12 @@ local Reactions = {
 
 local saveQueued = false
 
-local function path()
-	return string.format("%s/%d.json", Config.AutoReact.Folder, game.PlaceId)
+local function gameKey()
+	return game.GameId ~= 0 and game.GameId or game.PlaceId
+end
+
+local function path(id)
+	return string.format("%s/%d.json", Config.AutoReact.Folder, id or gameKey())
 end
 
 local function cleanId(raw)
@@ -51,7 +55,11 @@ function Reactions.load()
 		return
 	end
 	local ok, raw = pcall(function()
-		return isfile(path()) and readfile(path())
+		for _, file in ipairs({ path(), path(game.PlaceId) }) do
+			if isfile(file) then
+				return readfile(file)
+			end
+		end
 	end)
 	if not ok or not raw then
 		return

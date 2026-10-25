@@ -42,7 +42,7 @@ function SettingsTab.build(Window, lib, features)
 	lib.SaveManager:SetIgnoreIndexes(ignore)
 
 	lib.ThemeManager:SetFolder(Config.ConfigFolder)
-	lib.SaveManager:SetFolder(Config.ConfigFolder .. "/" .. tostring(game.PlaceId))
+	lib.SaveManager:SetFolder(Config.ConfigFolder .. "/" .. tostring(game.GameId ~= 0 and game.GameId or game.PlaceId))
 
 	lib.SaveManager:BuildConfigSection(Tab)
 	lib.ThemeManager:ApplyToTab(Tab)
